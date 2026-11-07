@@ -128,6 +128,8 @@ registry! {
     synopsis: "itunes KEYWORD", run: super::lookup::itunes_cmd;
     name: "wikidata", summary: "Look up a Wikidata item and its structured record (keyless)",
     synopsis: "wikidata QUERY", run: super::lookup::wikidata_cmd;
+    name: "telegram-network", summary: "Map the public channels a Telegram channel forwards from or links to (keyless, bounded)",
+    synopsis: "telegram-network HANDLE [--depth 1-3] [--max 1-50]", run: super::lookup::telegram_network_cmd;
     name: "gleif", summary: "Look up a legal entity on the GLEIF LEI register (keyless)",
     synopsis: "gleif [--country CC] [--jurisdiction CC[-SUB]] LEI|NAME", run: super::lookup::gleif_cmd;
     name: "company", summary: "Look up an Australian organisation on ASIC registers and GLEIF (keyless)",

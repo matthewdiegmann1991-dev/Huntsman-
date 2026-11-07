@@ -298,6 +298,7 @@ pub mod store;
 pub mod submd;
 pub mod tags;
 pub mod telegram;
+pub mod telegram_network;
 pub mod temporal_consistency;
 pub mod termination;
 pub mod textnorm;
