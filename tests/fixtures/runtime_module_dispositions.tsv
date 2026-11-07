@@ -287,6 +287,7 @@ stopforumspam	adapter	StopForumSpam leg reached through indicator_legs from emai
 store	exporter	bounded atomic session persistence
 submd	adapter	sub.md passive subdomain leg reached through indicator_legs from domain, scan and /api/lookup
 tags	leaf	entity tag constants
+telegram	adapter	keyless public Telegram page client (t.me/HANDLE), reached from username_cli by the username command and username scans, bounded by the same guarded transport
 temporal_consistency	runtime	one source's impossible date orders through intelligence report
 termination	runtime	explicit bounded termination semantics
 textnorm	leaf	text normalization
