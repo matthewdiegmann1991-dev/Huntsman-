@@ -65,6 +65,7 @@ cross_scan	runtime	bounded historical scan bridge analysis
 crtsh	adapter	Certificate Transparency source client
 crypto_cli	adapter	crypto lookup front-end reached from crypto, scan -k crypto and /api/lookup
 cve_cli	adapter	cve front-end reached from the cve command, merging osv and epss into one CVE document
+cvss	leaf	offline CVSS v3.0/v3.1 base-score and severity computation from a vector string
 deadline	leaf	shared per-lookup request budget
 dehashed	adapter	DeHashed exact-match source client and lineage-safe collector
 dependency	runtime	module dependency and dispatch graph
