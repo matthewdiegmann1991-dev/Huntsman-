@@ -302,6 +302,7 @@ mod tests {
                 "otx",
                 "urlscan",
                 "ipinfo",
+                "ipapi_is",
                 "robtex",
                 "hackertarget",
                 "stopforumspam",
@@ -315,7 +316,7 @@ mod tests {
         // carry it.
         assert!(legs.outcomes.iter().all(|o| !o.kind.is_accepted()));
         assert!(legs.outcomes.iter().any(|o| o.kind.is_transport_failure()));
-        assert_eq!(transport.0.lock().map_or(0, |v| v.len()), 11);
+        assert_eq!(transport.0.lock().map_or(0, |v| v.len()), 12);
     }
 
     /// A transport threads may share whose every answer is an empty document after `delay`, so

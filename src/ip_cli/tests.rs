@@ -134,6 +134,11 @@ fn keyless() -> Routes {
         ("https://urlscan.io/", 200, URLSCAN_NONE),
         ("https://ipinfo.io/", 200, IPINFO),
         (
+            "https://api.ipapi.is/",
+            200,
+            r#"{"ip":"1.1.1.1","is_bogon":false,"company":"Cloudflare, Inc.","asn":"AS13335 Cloudflare, Inc.","city":"Sydney","region":"New South Wales","country":"Australia","lat":-33.86785,"lon":151.20732,"timezone":"Australia/Sydney","docs":"https://ipapi.is/free-tier.html?ref=api"}"#,
+        ),
+        (
             "https://freeapi.robtex.com/",
             200,
             r#"{"status":"ok","pas":[]}"#,
@@ -241,6 +246,7 @@ fn keyless_legs_run_without_keys_and_keyed_legs_send_nothing() {
             "otx.alienvault.com",
             "urlscan.io",
             "ipinfo.io",
+            "api.ipapi.is",
             "freeapi.robtex.com",
             "api.hackertarget.com",
             "api.stopforumspam.org",
@@ -257,6 +263,7 @@ fn keyless_legs_run_without_keys_and_keyed_legs_send_nothing() {
     assert_eq!(outcome(&report, "otx"), SourceOutcomeKind::ValidZero);
     assert_eq!(outcome(&report, "urlscan"), SourceOutcomeKind::ValidZero);
     assert_eq!(outcome(&report, "ipinfo"), SourceOutcomeKind::Success);
+    assert_eq!(outcome(&report, "ipapi_is"), SourceOutcomeKind::Success);
     // Maltiverse answers an address it had no record of with the neutral record it makes for it.
     assert_eq!(outcome(&report, "maltiverse"), SourceOutcomeKind::Success);
     for source in [
@@ -294,7 +301,7 @@ fn keyless_legs_run_without_keys_and_keyed_legs_send_nothing() {
     }
     assert_eq!(
         report.outcomes.len(),
-        23 + unkeyed.len(),
+        24 + unkeyed.len(),
         "every keyless leg reports once and every keyed one that it was not configured"
     );
 
