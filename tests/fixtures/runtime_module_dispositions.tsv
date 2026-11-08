@@ -146,6 +146,7 @@ isc	adapter	Internet Storm Center leg reached through indicator_legs from ip, sc
 itunes	adapter	Apple iTunes Search source client reached through itunes_cli from the itunes command
 itunes_cli	adapter	itunes keyword front-end reached from the itunes command
 json	exporter	canonical JSON support
+kev	adapter	keyless CISA KEV known-exploited catalogue, one download kept in the feed directory, matched locally, reached through cve_cli from the cve command
 key_import	adapter	Spiderfoot SpiderFoot.cfg and keys-file key import reached through serve's POST /api/settings/keys (Settings, Import API keys)
 keybase	adapter	public Keybase identity source client reached through username_cli from the username command and scan
 keys	leaf	credential file handling
