@@ -6,7 +6,7 @@
 //!
 //! The subject's full name leaves the device: [`discover`] sends it to Bing, Brave and
 //! Mojeek and to Open Library, and [`bibliography`] to Open Library alone.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -72,6 +72,9 @@ pub struct SearchFacet {
     pub query: String,
     pub index_hits: usize,
     pub discarded_out_of_scope: usize,
+    /// In-scope results whose title and address do not carry every token of the name: the
+    /// engine's fuzzy match for a different person, never a lead.
+    pub discarded_name_mismatch: usize,
     pub outcomes: Vec<SourceExecutionOutcome>,
 }
 
@@ -118,6 +121,25 @@ pub fn checked_name(raw: &str) -> Result<String, Error> {
         return Err(refused());
     }
     Ok(name)
+}
+
+/// The lower-case alphanumeric words of `text`.
+fn words(text: &str) -> BTreeSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// Whether a search result names the subject: every token of the name is a whole word of the
+/// result's anchor text or address, or the address runs the tokens together (`kylietrong`).
+/// Search engines relax a quoted phrase to near-matches ("Kylie Luong" for "Kylie Trong"); a
+/// result that never names the subject is not a lead for them. **Pure.**
+fn names_subject(name: &str, url: &str, text: &str) -> bool {
+    let tokens: Vec<String> = name.split_whitespace().map(str::to_lowercase).collect();
+    let mut seen = words(text);
+    seen.extend(words(url));
+    tokens.iter().all(|token| seen.contains(token)) || seen.contains(&tokens.concat())
 }
 
 fn is_accepted_host(url: &str, domain: &str) -> bool {
@@ -167,10 +189,15 @@ pub fn discover<T: Transport + ?Sized>(
         let (response, index_sightings) =
             web_query::search_with_provenance(transport, &query, now_unix, EngineSet::Default)?;
         let mut discarded = 0;
+        let mut mismatched = 0;
         let index_hits = index_sightings.len();
         for hit in index_sightings {
             if !is_accepted_host(&hit.url, host) {
                 discarded += 1;
+                continue;
+            }
+            if !names_subject(&name, &hit.url, &hit.text) {
+                mismatched += 1;
                 continue;
             }
             if !candidates.contains_key(&hit.url) && candidates.len() == MAX_CANDIDATES {
@@ -198,6 +225,7 @@ pub fn discover<T: Transport + ?Sized>(
             query,
             index_hits,
             discarded_out_of_scope: discarded,
+            discarded_name_mismatch: mismatched,
             outcomes: response.outcomes,
         });
     }
@@ -266,13 +294,15 @@ mod tests {
                     truncated: false,
                 });
             }
+            // Every in-scope result names each subject the shared fixture serves; the search
+            // cache is shared between tests, so each test searches a name of its own.
             let body = concat!(
-                "<html><a href='https://linkedin.com/in/jane-example'>profile</a>",
-                "<a href='https://github.com/jane-example'>code</a>",
-                "<a href='https://orcid.org/0000-0001-1111-1111'>research</a>",
-                "<a href='https://asic.gov.au/register/candidate'>register</a>",
-                "<a href='https://sec.gov/archives/candidate'>US</a>",
-                "<a href='https://github.com.evil.example/false'>impersonation</a></html>"
+                "<html><a href='https://linkedin.com/in/jane-example'>Clara Ashwell, Jane Example, Alyssa Example - LinkedIn</a>",
+                "<a href='https://github.com/jane-example'>Clara Ashwell, Jane Example, Alyssa Example</a>",
+                "<a href='https://orcid.org/0000-0001-1111-1111'>Clara Ashwell, Jane Example, Alyssa Example - ORCID</a>",
+                "<a href='https://asic.gov.au/register/candidate'>Clara Ashwell, Jane Example, Alyssa Example</a>",
+                "<a href='https://sec.gov/archives/candidate'>Clara Ashwell, Jane Example, Alyssa Example</a>",
+                "<a href='https://github.com.evil.example/false'>Clara Ashwell, Jane Example, Alyssa Example</a></html>"
             );
             Ok(Response {
                 status: 200,
@@ -336,6 +366,72 @@ mod tests {
             1,
             "one direct catalogue request, no extra index-engine fanout"
         );
+    }
+
+    #[test]
+    fn engine_near_matches_for_another_name_are_never_leads() {
+        struct Relaxed;
+        impl Transport for Relaxed {
+            fn send(&self, request: &Request) -> Result<Response, TransportFailure> {
+                let catalogue = request.url.starts_with("https://openlibrary.org/");
+                let body: &[u8] = if catalogue {
+                    br#"{"numFound":0,"numFoundExact":true,"docs":[]}"#
+                } else {
+                    // An engine relaxing "Mira Holtby" to near-matches beside two real ones.
+                    concat!(
+                        "<html><a href='https://linkedin.com/in/m-h-7'><b>Mira</b> Holtby - LinkedIn</a>",
+                        "<a href='https://github.com/mira-holtby'>code</a>",
+                        "<a href='https://linkedin.com/in/mira-holt'>Mira Holt - LinkedIn</a>",
+                        "<a href='https://github.com/miraholtbyson'>Mira Holtbyson</a></html>"
+                    )
+                    .as_bytes()
+                };
+                let kind = if catalogue {
+                    "application/json"
+                } else {
+                    "text/html"
+                };
+                Ok(Response {
+                    status: 200,
+                    headers: vec![("content-type".into(), kind.into())],
+                    body: body.to_vec(),
+                    truncated: false,
+                })
+            }
+        }
+        let report = discover(&Relaxed, "Mira Holtby", Region::Au, 1).unwrap();
+        let urls: Vec<&str> = report.candidates.iter().map(|c| c.url.as_str()).collect();
+        // The name in the title, or in the address alone, keeps a result; a near-match never.
+        assert_eq!(
+            urls,
+            [
+                "https://github.com/mira-holtby",
+                "https://linkedin.com/in/m-h-7"
+            ],
+        );
+        assert!(report.facets.iter().any(|f| f.discarded_name_mismatch > 0));
+    }
+
+    #[test]
+    fn a_name_matches_whole_words_of_the_title_or_address_only() {
+        assert!(names_subject(
+            "kylie trong",
+            "https://x/in/kylie-trong-1",
+            ""
+        ));
+        assert!(names_subject("kylie trong", "https://x/kylietrong", ""));
+        assert!(names_subject(
+            "kylie trong",
+            "https://x/1",
+            "TRONG, Kylie - Register"
+        ));
+        assert!(!names_subject(
+            "kylie trong",
+            "https://x/in/kylie-luong",
+            "Kylie Luong"
+        ));
+        assert!(!names_subject("kylie trong", "https://x/1", "Kylie Strong"));
+        assert!(!names_subject("kylie trong", "https://x/1", ""));
     }
 
     #[test]
