@@ -289,28 +289,56 @@ pub fn name_tokens(full: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether `text` carries every word of `query` as a name token: for each word, some run of
-/// letters in `text` two or more characters long lowercases to it. Exactly whether
-/// [`name_tokens`]`(text)` holds every word, decided without splitting `text` or allocating, so
-/// every row of a list can be asked before any is parsed: a row that cannot carry the name is
-/// never split, and a cell that is asked afterwards answers the same. **Pure.**
+/// The transliteration-aware match keys of a name: each [`name_tokens`] token reduced to its
+/// canonical romanised ASCII form ([`crate::translit::match_key`]), with empty keys dropped. A name
+/// written in Cyrillic and its Latin transliteration produce the same keys, so the two meet. **Pure.**
 #[must_use]
-pub fn carries_name(text: &str, query: &[String]) -> bool {
-    if query.is_empty() {
+pub fn name_match_keys(full: &str) -> Vec<String> {
+    name_tokens(full)
+        .iter()
+        .map(|token| crate::translit::match_key(token))
+        .filter(|key| key.chars().nth(1).is_some())
+        .collect()
+}
+
+/// Whether `candidate` carries every word of `subject`, matching across scripts: both sides are
+/// reduced to transliteration-aware keys ([`name_match_keys`]), then every subject key must be a
+/// candidate key. `subject` with fewer than two keys never matches, as a single common name is too
+/// weak a signal on its own. **Pure.**
+#[must_use]
+pub fn subject_name_match(subject: &str, candidate: &str) -> bool {
+    let wanted = name_match_keys(subject);
+    if wanted.len() < 2 {
+        return false;
+    }
+    carries_every_key(candidate, &wanted)
+}
+
+/// Whether `candidate` carries every one of `wanted`, a subject's match keys from
+/// [`name_match_keys`]: for each key, some run of letters in `candidate` two or more characters
+/// long reduces to it ([`crate::translit::match_key`]). Exactly whether
+/// [`name_match_keys`]`(candidate)` holds every key, decided without splitting `candidate` and,
+/// for a run of ASCII letters, without allocating, so every row of a list can be asked before any
+/// is parsed: a row that cannot carry the name is never split, and a cell asked afterwards
+/// answers the same. The one subset rule every subject-name matcher shares; callers keep their
+/// own rule for how few keys a subject may have. **Pure.**
+#[must_use]
+pub fn carries_every_key(candidate: &str, wanted: &[String]) -> bool {
+    if wanted.is_empty() {
         return true;
     }
-    if query.len() > 64 {
-        return query.iter().all(|word| has_name_token(text, word));
+    if wanted.len() > 64 {
+        return wanted.iter().all(|key| has_key(candidate, key));
     }
-    let every = if query.len() == 64 {
+    let every = if wanted.len() == 64 {
         u64::MAX
     } else {
-        (1_u64 << query.len()) - 1
+        (1_u64 << wanted.len()) - 1
     };
     let mut carried = 0_u64;
-    for run in letter_runs(text) {
-        for (index, word) in query.iter().enumerate() {
-            if carried & (1 << index) == 0 && run_is_word(run, word) {
+    for run in letter_runs(candidate) {
+        for (index, key) in wanted.iter().enumerate() {
+            if carried & (1 << index) == 0 && run_is_key(run, key) {
                 carried |= 1 << index;
             }
         }
@@ -321,9 +349,9 @@ pub fn carries_name(text: &str, query: &[String]) -> bool {
     false
 }
 
-/// Whether some run of letters in `text` lowercases to `word`. **Pure.**
-fn has_name_token(text: &str, word: &str) -> bool {
-    letter_runs(text).any(|run| run_is_word(run, word))
+/// Whether some run of letters in `candidate` reduces to `key`. **Pure.**
+fn has_key(candidate: &str, key: &str) -> bool {
+    letter_runs(candidate).any(|run| run_is_key(run, key))
 }
 
 /// The runs of letters in `text` that [`name_tokens`] keeps: two or more characters long.
@@ -332,17 +360,18 @@ fn letter_runs(text: &str) -> impl Iterator<Item = &str> {
         .filter(|run| run.chars().nth(1).is_some())
 }
 
-/// Whether `run` lowercases to `word`, as [`name_tokens`] lowercases it: a run of ASCII letters
-/// is compared in place, any other run through the same lowercasing. **Pure.**
-fn run_is_word(run: &str, word: &str) -> bool {
+/// Whether `run` reduces to `key`, as [`name_match_keys`] reduces a token: a run of ASCII letters
+/// is its lowercase self, compared in place; any other run goes through the same romanising and
+/// folding. **Pure.**
+fn run_is_key(run: &str, key: &str) -> bool {
     if run.is_ascii() {
-        run.len() == word.len()
+        run.len() == key.len()
             && run
                 .bytes()
-                .zip(word.bytes())
+                .zip(key.bytes())
                 .all(|(letter, wanted)| letter.to_ascii_lowercase() == wanted)
     } else {
-        run.to_lowercase() == word
+        crate::translit::match_key(run) == key
     }
 }
 
@@ -1149,54 +1178,59 @@ mod tests {
         assert!(!whole_word_token_match("ZOLA, EMILE", "émile zola"));
     }
 
-    /// `carries_name` is `name_tokens` containment, decided in place: the same answer for every
-    /// row shape a list can hold (quoted cells, apostrophes, accents, Greek sigmas that
-    /// lowercase by their position, the dotted capital I, digits, initials) and for words that
-    /// are letters of a longer token.
+    /// `carries_every_key` is `name_match_keys` containment, decided in place: the same answer
+    /// for every row shape a list can hold (quoted cells, apostrophes, accents, Cyrillic, Greek
+    /// sigmas that lowercase by their position, the dotted capital I, digits, initials) and for
+    /// words that are letters of a longer token.
     #[test]
-    fn carries_name_is_name_tokens_containment_without_splitting() {
-        let contained = |text: &str, query: &[String]| {
-            let have = name_tokens(text);
-            query.iter().all(|word| have.contains(word))
+    fn carries_every_key_is_name_match_keys_containment_without_splitting() {
+        let contained = |text: &str, wanted: &[String]| {
+            let have = name_match_keys(text);
+            wanted.iter().all(|key| have.contains(key))
         };
-        let words = |name: &str| name_tokens(name);
         for (text, name, expected) in [
             ("\"KIM, Jong Un\",\"individual\"", "jong un kim", true),
             ("O'Brien-Smith;7200;P", "brien smith", true),
             ("Mohammed Zahir KHARBOUTLI", "bout", false),
             ("ZOLA, ÉMILE", "émile zola", true),
-            ("ZOLA, EMILE", "émile zola", false),
+            // A match key folds diacritics: the plain spelling meets the accented one.
+            ("ZOLA, EMILE", "émile zola", true),
+            ("Zürich Holdings", "zurich", true),
+            // Cyrillic meets its romanisation in either direction; a namesake does not.
+            ("PUTIN, Vladimir", "Владимир Путин", true),
+            ("Владимир Путин", "Vladimir Putin", true),
+            ("Владимир Иванов", "Vladimir Putin", false),
+            // Greek letters have no key: a Greek name asks for nothing, in place or split.
             ("ΟΔΥΣΣΕΥΣ ΕΛΥΤΗΣ", "οδυσσευς ελυτης", true),
             // The dotted capital I lowercases to two code points, the second no letter: the
             // word asked splits there and the city is not found, split or in place.
             ("İSTANBUL Ltd", "i̇stanbul", false),
-            ("É Lovelace", "lovelace", true),
             // A one-letter word is an initial, asked of nothing.
             ("É Lovelace", "é lovelace", true),
             ("Ada Lovelace", "", true),
             ("", "ada", false),
             ("12 345 678 901,Ada", "ada", true),
-            // The words of a name are its lowercased tokens, whatever case it was typed in.
+            // The keys of a name are lowercase, whatever case it was typed in.
             ("ada", "ADA", true),
         ] {
-            let query = words(name);
+            let wanted = name_match_keys(name);
             assert_eq!(
-                carries_name(text, &query),
+                carries_every_key(text, &wanted),
                 expected,
                 "{text:?} carries {name:?}"
             );
             assert_eq!(
-                carries_name(text, &query),
-                contained(text, &query),
+                carries_every_key(text, &wanted),
+                contained(text, &wanted),
                 "{text:?} {name:?}"
             );
         }
-        // An uppercase word is never a token, in place or split.
-        assert!(!carries_name("ada", &["ADA".to_owned()]));
+        // An uppercase key is never carried, in place or split.
+        assert!(!carries_every_key("ada", &["ADA".to_owned()]));
         // Many thousands of generated rows over an alphabet of the awkward cases agree.
-        const ALPHABET: [&str; 20] = [
+        const ALPHABET: [&str; 24] = [
             "a", "b", "B", "é", "É", "Σ", "σ", "ς", "İ", "i", "ß", "ẞ", "'", "\"", ",", ";", " ",
-            "1", "-", "\u{307}",
+            "1", "-", "\u{307}", "П", "р", "ж", "ü",
         ];
         fn next(state: &mut u64) -> u64 {
             *state ^= *state << 13;
@@ -1206,7 +1240,7 @@ mod tests {
         }
         fn generated(state: &mut u64, length: u64) -> String {
             (0..length)
-                .map(|_| ALPHABET[usize::try_from(next(state) % 20).unwrap_or(0)])
+                .map(|_| ALPHABET[usize::try_from(next(state) % 24).unwrap_or(0)])
                 .collect()
         }
         let mut state = 0x2545_f491_4f6c_dd1d_u64;
@@ -1214,21 +1248,36 @@ mod tests {
             let length = 1 + next(&mut state) % 24;
             let text = generated(&mut state, length);
             let length = 1 + next(&mut state) % 8;
-            let mut query = name_tokens(&generated(&mut state, length));
+            let mut wanted = name_match_keys(&generated(&mut state, length));
             if next(&mut state).is_multiple_of(3) {
-                // Half the queries draw their words from the text itself.
-                query.extend(name_tokens(&text).into_iter().take(2));
+                // A third of the queries draw their keys from the text itself.
+                wanted.extend(name_match_keys(&text).into_iter().take(2));
             }
             assert_eq!(
-                carries_name(&text, &query),
-                contained(&text, &query),
-                "{text:?} {query:?}"
+                carries_every_key(&text, &wanted),
+                contained(&text, &wanted),
+                "{text:?} {wanted:?}"
             );
         }
-        // More than sixty-four words are asked one by one.
+        // More than sixty-four keys are asked one by one.
         let many: Vec<String> = (0..70).map(|_| "ada".to_owned()).collect();
-        assert!(carries_name("Ada Lovelace", &many));
-        assert!(!carries_name("Lovelace", &many));
+        assert!(carries_every_key("Ada Lovelace", &many));
+        assert!(!carries_every_key("Lovelace", &many));
+    }
+
+    #[test]
+    fn subject_name_match_bridges_cyrillic_and_latin() {
+        // A Cyrillic query meets a Latin listing and the reverse, in any word order.
+        assert!(subject_name_match("Сергей Шойгу", "Sergey Shoygu"));
+        assert!(subject_name_match("Sergey Shoygu", "Шойгу Сергей"));
+        assert!(subject_name_match("Владимир Путин", "Vladimir Putin"));
+        // A listing missing one of the subject's words is never a match.
+        assert!(!subject_name_match("Сергей Шойгу", "Sergey Ivanov"));
+        // A single common name is too weak to match on its own.
+        assert!(!subject_name_match("Путин", "Putin"));
+        // Pure-ASCII behaviour is unchanged: still a whole-word subset match.
+        assert!(subject_name_match("Ada Lovelace", "ada k lovelace"));
+        assert!(!subject_name_match("Ada Lovelace", "ada byron"));
     }
 
     #[test]

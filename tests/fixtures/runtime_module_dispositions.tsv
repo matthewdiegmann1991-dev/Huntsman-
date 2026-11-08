@@ -297,6 +297,7 @@ telegram_network	adapter	bounded keyless map of public Telegram channels reached
 temporal_consistency	runtime	one source's impossible date orders through intelligence report
 termination	runtime	explicit bounded termination semantics
 textnorm	leaf	text normalization
+translit	leaf	offline Cyrillic-to-Latin romanisation and ASCII folding for cross-script name matching
 threat_feeds	adapter	downloaded threat feeds (abuse.ch, AlienVault, blocklist.de, botvrij, CINS, CleanTalk, CyberCrime-Tracker, Emerging Threats, GreenSnow, OpenPhish, PhishTank, Steven Black, Tor exits, VoIPBL, VXVault) kept in the state directory and reached through ip_cli, domain_cli and netblock_cli from ip, domain, netblock, scan and /api/lookup
 threatfox	adapter	ThreatFox IOC leg reached through indicator_legs from ip, domain, scan and /api/lookup when its key is set
 tiktok_public_contact	adapter	keyless public TikTok bio contact client, reached from username_cli and bounded by same guarded transport

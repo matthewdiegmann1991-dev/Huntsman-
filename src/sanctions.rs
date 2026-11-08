@@ -165,9 +165,11 @@ struct Listing {
     fields: Vec<(&'static str, String)>,
 }
 
-/// Whether `listed` carries every word of `query`. **Pure.**
+/// Whether `listed` carries every word of `query`, matching across scripts: `query` is the
+/// subject's transliteration-aware match keys ([`crate::textnorm::name_match_keys`]), and `listed`
+/// is reduced the same way, so a Cyrillic listing and a Latin query (or the reverse) meet. **Pure.**
 fn names_query(listed: &str, query: &[String]) -> bool {
-    crate::textnorm::carries_name(listed, query)
+    crate::textnorm::carries_every_key(listed, query)
 }
 
 /// A list as read for one name: the listings that may carry it (built from their rows), how
@@ -251,7 +253,7 @@ pub fn check(
     if !transport.runs_module(SOURCE) {
         return (Vec::new(), Vec::new());
     }
-    let query = crate::textnorm::name_tokens(name);
+    let query = crate::textnorm::name_match_keys(name);
     if query.len() < 2 {
         return (Vec::new(), Vec::new());
     }
@@ -721,7 +723,7 @@ const EU_FIELDS: [(&str, &str); 16] = [
 /// words), and how many subjects the list holds. The file holds one row per combination of a
 /// subject's names, addresses, birth dates, documents and citizenships, so rows are grouped by
 /// `Entity_LogicalId` and each value is kept once, in file order. A subject is built only when
-/// one of its rows can carry every word of `query` ([`crate::textnorm::carries_name`]), so the
+/// one of its rows can carry every word of `query` ([`crate::textnorm::carries_every_key`]), so the
 /// rows of every other subject are counted and never split. **Pure.**
 fn parse_eu(csv: &str, query: &[String]) -> Parsed {
     let mut lines = csv.trim_start_matches('\u{feff}').lines();
@@ -746,7 +748,7 @@ fn parse_eu(csv: &str, query: &[String]) -> Parsed {
             unreadable += 1;
             continue;
         }
-        if crate::textnorm::carries_name(line, query) {
+        if crate::textnorm::carries_every_key(line, query) {
             candidates.insert(id.clone());
         }
         read.insert(id);
@@ -856,7 +858,7 @@ fn parse_ofac(sdn: &str, alt: &str, query: &[String]) -> Parsed {
     let mut candidates: HashSet<Cow<'_, str>> = HashSet::new();
     for line in alt.lines() {
         let line = line.trim_end_matches('\r');
-        if crate::textnorm::carries_name(line, query) {
+        if crate::textnorm::carries_every_key(line, query) {
             candidates.insert(field_of(line, ',', 0));
         }
     }
@@ -874,7 +876,7 @@ fn parse_ofac(sdn: &str, alt: &str, query: &[String]) -> Parsed {
             continue;
         }
         read += 1;
-        if crate::textnorm::carries_name(line, query) {
+        if crate::textnorm::carries_every_key(line, query) {
             candidates.insert(number);
         }
     }
@@ -1032,9 +1034,9 @@ fn parse_un(xml: &str, query: &[String]) -> Parsed {
 /// unescaped first when a character reference in it could spell a letter. **Pure.**
 fn block_carries(block: &str, query: &[String]) -> bool {
     if block.contains("&#") {
-        crate::textnorm::carries_name(&xml_unescape(block), query)
+        crate::textnorm::carries_every_key(&xml_unescape(block), query)
     } else {
-        crate::textnorm::carries_name(block, query)
+        crate::textnorm::carries_every_key(block, query)
     }
 }
 

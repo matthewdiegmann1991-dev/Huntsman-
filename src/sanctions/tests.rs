@@ -300,7 +300,7 @@ fn a_list_builds_only_the_listings_that_may_carry_the_name_and_counts_them_all()
     fn same_as_whole(every: &[Listing], held: usize, parse: impl Fn(&[String]) -> Parsed) {
         for listing in every {
             for name in &listing.names {
-                let query = crate::textnorm::name_tokens(name);
+                let query = crate::textnorm::name_match_keys(name);
                 let parsed = parse(&query);
                 assert_eq!(parsed.read, held, "{name}: every listing is counted");
                 assert_eq!(parsed.unreadable, 0, "{name}: every row is readable");
@@ -338,12 +338,12 @@ fn a_list_builds_only_the_listings_that_may_carry_the_name_and_counts_them_all()
     // A quoted cell before the identifier, or a quoted identifier, sends the row to the splitter.
     let quoted_date = EU_CSV.replace("07/11/2026;7200;", "\"07/11/2026\";\"7200\";");
     assert_ne!(quoted_date, EU_CSV);
-    let badege = crate::textnorm::name_tokens("Eric Badege");
+    let badege = crate::textnorm::name_match_keys("Eric Badege");
     assert_eq!(parse_eu(&quoted_date, &badege), parse_eu(EU_CSV, &badege));
     assert_eq!(parse_eu(&quoted_date, &[]), every_eu);
     let quoted_number = SDN.replace("8279,", "\"8279\",");
     let quoted_alias = ALT.replace("8279,", "\"8279\",");
-    let bout = crate::textnorm::name_tokens("Victor Butt");
+    let bout = crate::textnorm::name_match_keys("Victor Butt");
     assert_eq!(
         parse_ofac(&quoted_number, &quoted_alias, &bout),
         parse_ofac(SDN, ALT, &bout)
@@ -368,7 +368,7 @@ fn a_list_builds_only_the_listings_that_may_carry_the_name_and_counts_them_all()
     // A name spelled with a character reference is matched as the letter it spells.
     let referenced = UN_XML.replace("<FIRST_NAME>ERIC<", "<FIRST_NAME>&#201;RIC<");
     assert_ne!(referenced, UN_XML);
-    let eric = crate::textnorm::name_tokens("Éric Badege");
+    let eric = crate::textnorm::name_match_keys("Éric Badege");
     let parsed = parse_un(&referenced, &eric);
     assert_eq!((parsed.read, parsed.unreadable), (2, 0));
     assert_eq!(parsed.listings.len(), 1, "{parsed:?}");
@@ -705,7 +705,7 @@ fn unreadable_rows_block_a_clean_zero() {
     );
     // A subject the EU file names only on a short row is not cleared either.
     let short_eu = format!("{EU_CSV}07/11/2026;999;EU.1.1;P;SYR;;;Jane Doe\r\n");
-    let parsed = parse_eu(&short_eu, &crate::textnorm::name_tokens("Jane Doe"));
+    let parsed = parse_eu(&short_eu, &crate::textnorm::name_match_keys("Jane Doe"));
     // The short row is not a subject read: it is counted among the unreadable rows alone.
     assert_eq!(
         (parsed.listings.len(), parsed.read, parsed.unreadable),

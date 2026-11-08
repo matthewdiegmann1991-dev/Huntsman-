@@ -254,7 +254,7 @@ pub fn check(
     scan_id: &str,
     now_unix: u64,
 ) -> Option<(Vec<Entity>, SourceExecutionOutcome)> {
-    let query = crate::textnorm::name_tokens(name);
+    let query = crate::textnorm::name_match_keys(name);
     if query.len() < 2 {
         return None;
     }
@@ -475,7 +475,7 @@ fn match_table(
 
 /// Whether `listed` carries every word of `query`. **Pure.**
 fn names_query(listed: &str, query: &[String]) -> bool {
-    crate::textnorm::carries_name(listed, query)
+    crate::textnorm::carries_every_key(listed, query)
 }
 
 /// Whether some cell of the row `line` may satisfy `criterion`, asked of the row before it is
@@ -483,7 +483,7 @@ fn names_query(listed: &str, query: &[String]) -> bool {
 /// the row's. Necessary, never sufficient: a row that may is split and its cells asked. **Pure.**
 fn may_match(line: &str, criterion: &Matcher) -> bool {
     match criterion {
-        Matcher::Name(query) => crate::textnorm::carries_name(line, query),
+        Matcher::Name(query) => crate::textnorm::carries_every_key(line, query),
         Matcher::Id(digits) => {
             let row_digits: String = line.chars().filter(char::is_ascii_digit).collect();
             row_digits.contains(digits.as_str())
