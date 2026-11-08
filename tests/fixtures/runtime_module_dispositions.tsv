@@ -64,6 +64,7 @@ credential_origin	leaf	authentication authority boundary
 cross_scan	runtime	bounded historical scan bridge analysis
 crtsh	adapter	Certificate Transparency source client
 crypto_cli	adapter	crypto lookup front-end reached from crypto, scan -k crypto and /api/lookup
+cve_cli	adapter	cve front-end reached from the cve command, merging osv and epss into one CVE document
 deadline	leaf	shared per-lookup request budget
 dehashed	adapter	DeHashed exact-match source client and lineage-safe collector
 dependency	runtime	module dependency and dispatch graph
@@ -92,6 +93,7 @@ engineering_command	diagnostic	executable engineering command hierarchy and capa
 entity	runtime	canonical entity and evidence model
 entity_reality	leaf	read-only bounded source-attributed saved-entity claim assessment reached through scan_api and scans reality
 environment	leaf	the process environment, read through one module
+epss	adapter	keyless FIRST EPSS per-CVE exploitation-probability client reached through cve_cli from the cve command
 error	leaf	shared error type
 eth_rpc	adapter	keyless Ethereum mainnet account observations through crypto_cli, scan and shared Web UI lookup over the shared evm_rpc core; provenance retained without ownership attribution
 evidence	runtime	Stage 2 directory shim re-exporting L1 evidence-contract leaves
@@ -190,6 +192,7 @@ osint_blueprint	exporter	OSINT app blueprint registry reached through the bluepr
 osint_casework	leaf	source-linked casework model reached through osint case; receipts, chronology and conflicts without identity attribution
 osint_matrix	runtime	canonical compiled source-file ownership matrix reached through osint matrix CLI and protected GET /api/osint/matrix; read-only and not evidence of live provider availability
 osint_synergy	runtime	source-join links between entities through shared DNS, IP and ASN attributes, each labelled not proven, reached through the analysis report, the offline analysis and /api/lookup
+osv	adapter	keyless OSV per-CVE vulnerability record client reached through cve_cli from the cve command
 otx	adapter	AlienVault OTX leg reached through indicator_legs from ip, domain, scan and /api/lookup
 oui	leaf	OUI lookup
 oui_ieee	leaf	IEEE OUI data
