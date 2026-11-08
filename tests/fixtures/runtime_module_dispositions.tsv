@@ -118,6 +118,7 @@ indicator_sources	adapter	indicator-source registry run by indicator_legs for ip
 intelligence	runtime	aggregated intelligence report
 internetdb	adapter	Shodan InternetDB leg reached through ip_cli from ip, scan -k ip and /api/lookup
 ip_cli	runtime	ip lookup front-end reached from ip, scan -k ip and /api/lookup
+ipapi_is	adapter	ipapi.is IP intelligence leg reached through indicator_legs from ip, scan -k ip and /api/lookup; keyless, with optional HUNTSMAN_IPAPI_IS_KEY for detection flags
 ipinfo	adapter	IPinfo leg reached through indicator_legs from ip, scan and /api/lookup
 ipinfo_lite	adapter	IPinfo Lite country/ASN leg reached through indicator_legs from ip, scan and /api/lookup when HUNTSMAN_IPINFO_KEY is set
 ipqs	adapter	IPQualityScore IP leg reached through indicator_legs from ip, scan -k ip and /api/lookup when its key is set

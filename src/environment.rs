@@ -92,6 +92,8 @@ pub const HLR_KEY_ENV: &str = "HUNTSMAN_HLR_KEY";
 pub const HUNTER_KEY_ENV: &str = "HUNTSMAN_HUNTER_KEY";
 pub const INTELX_KEY_ENV: &str = "HUNTSMAN_INTELX_KEY";
 pub const HACKERTARGET_KEY_ENV: &str = "HUNTSMAN_HACKERTARGET_KEY";
+/// Optional ipapi.is key: unlocks the hosting/VPN/proxy/Tor/abuse flags and raises the daily limit.
+pub const IPAPI_IS_KEY_ENV: &str = "HUNTSMAN_IPAPI_IS_KEY";
 pub const IPINFO_KEY_ENV: &str = "HUNTSMAN_IPINFO_KEY";
 pub const IPQS_KEY_ENV: &str = "HUNTSMAN_IPQS_KEY";
 pub const OPENCELLID_KEY_ENV: &str = "HUNTSMAN_OPENCELLID_KEY";
@@ -174,6 +176,7 @@ pub const KNOWN_VARIABLES: &[&str] = &[
     HUNTER_KEY_ENV,
     INTELX_KEY_ENV,
     HACKERTARGET_KEY_ENV,
+    IPAPI_IS_KEY_ENV,
     IPINFO_KEY_ENV,
     IPQS_KEY_ENV,
     OPENCELLID_KEY_ENV,

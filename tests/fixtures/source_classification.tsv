@@ -119,6 +119,7 @@ ip2location	infra	infra
 ip_cli	infra	infra
 ip_geo	infra	infra
 ip_whois_geo	infra	infra
+ipapi_is	infra	infra
 ipinfo	infra	infra
 ipinfo_lite	infra	infra
 ipqs	infra	infra

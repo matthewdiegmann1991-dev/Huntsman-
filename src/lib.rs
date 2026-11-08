@@ -146,6 +146,7 @@ pub mod infrastructure;
 pub mod intelligence;
 pub mod internetdb;
 pub mod ip_cli;
+pub mod ipapi_is;
 pub mod ipinfo;
 pub mod ipinfo_lite;
 pub mod ipqs;

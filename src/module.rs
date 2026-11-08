@@ -1329,6 +1329,15 @@ const REACHABLE_MODULES: &[ReachableModule] = &[
         description: "IPinfo Lite country and origin AS for an address, with bogon and anycast flags (free IPinfo token)",
     },
     ReachableModule {
+        name: "ipapi_is",
+        command: "ip ADDRESS",
+        access: "keyless",
+        network: true,
+        category: ModuleCategory::Infrastructure,
+        attack_techniques: &["T1590.005"],
+        description: "ipapi.is owner, origin AS and location; hosting, VPN, proxy, Tor, crawler and abuse flags with the optional free key",
+    },
+    ReachableModule {
         name: "robtex",
         command: "ip ADDRESS | domain DOMAIN",
         access: "keyless",

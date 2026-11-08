@@ -180,6 +180,7 @@ pub const PROFILES: &[SourceProfile] = &[
     row("icij_offshore", C::Other, Some(C::IdentityRegistry)),
     row("internetdb", C::Infra, None),
     row("ip_cli", C::Infra, None),
+    row("ipapi_is", C::Infra, None),
     row("ipinfo", C::Infra, None),
     row("ipinfo_lite", C::Infra, None),
     row("ipqs", C::Infra, None),

@@ -94,6 +94,7 @@ spends more than one provider's quota.
 | URLhaus (abuse.ch) | `HUNTSMAN_ABUSECH_KEY` | used by `ip` (IPv4 addresses only) and `domain` when set in the environment; the same free abuse.ch Auth-Key as `HUNTSMAN_THREATFOX_KEY` |
 | AlienVault OTX | `HUNTSMAN_OTX_KEY` | optional for `ip` and `domain`: OTX answers without a key at a lower limit; a free key raises it |
 | urlscan.io | `HUNTSMAN_URLSCAN_KEY` | optional for `ip` and `domain`: searches work without a key at a lower quota; a free key raises it |
+| ipapi.is | `HUNTSMAN_IPAPI_IS_KEY` | optional for `ip`, IP scans and `/api/lookup`: keyless gives owner, AS and location at 30 lookups/day; a free key (1,000/day, commercial use included) adds the hosting, VPN, proxy, Tor, crawler and abuse flags; sent as the `key` query parameter |
 | IPinfo | `HUNTSMAN_IPINFO_KEY` | optional for `ip`: IPinfo answers without a token at a lower limit; a free token gives 50,000 lookups/month |
 | Cert Spotter (SSLMate) | `HUNTSMAN_CERTSPOTTER_KEY` | optional for `domain`: Cert Spotter answers without a key at a lower limit; a free key raises it |
 | HackerTarget | `HUNTSMAN_HACKERTARGET_KEY` | optional for `ip` and `domain`: HackerTarget answers without a key at 50 queries a day; a membership key raises it |
@@ -177,6 +178,7 @@ HUNTSMAN_SECTRAILS_KEY=
 HUNTSMAN_ABUSECH_KEY=
 HUNTSMAN_OTX_KEY=
 HUNTSMAN_URLSCAN_KEY=
+HUNTSMAN_IPAPI_IS_KEY=
 HUNTSMAN_IPINFO_KEY=
 HUNTSMAN_HACKERTARGET_KEY=
 HUNTSMAN_CERTSPOTTER_KEY=
