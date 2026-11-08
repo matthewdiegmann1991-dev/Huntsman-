@@ -181,6 +181,7 @@ nominatim	adapter	OpenStreetMap Nominatim geocoding source client reached throug
 nominatim_cli	adapter	geocode forward/reverse front-end reached from the geocode command
 npm_author	adapter	keyless npm registry author lookup reached through username_cli from the username command and username scans, keeping the subject handle, only its own published contacts, and co-maintainer leads
 numverify	adapter	Numverify leg reached through phone_cli from phone, scan -k phone and /api/lookup when its key is set
+nvd	adapter	keyless NVD per-CVE record client reached through cve_cli from the cve command
 oathnet	adapter	OathNet breach-search leg reached through exposure_cli from exposure, scan -k exposure and /api/lookup
 opencellid	adapter	OpenCelliD cell position leg reached through indicator_legs from network cell:MCC:MNC:AREA:CELL, and its cells-in-area search from network LAT,LON, scan and /api/lookup when its key is set
 openlibrary_author	adapter	keyless Open Library author-catalogue leg reached through people_discovery from people-discover and POST /api/people/discover; each catalogue entry is a separate unverified lead
