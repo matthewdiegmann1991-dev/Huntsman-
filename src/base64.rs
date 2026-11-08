@@ -87,6 +87,13 @@ pub fn base16_upper(bytes: &[u8]) -> String {
     base16(bytes, BASE16_UPPER)
 }
 
+/// Append one byte as two upper-case Base16 digits, as percent-encoding's `%XX` writes it.
+/// **Pure.**
+pub fn push_base16_upper(out: &mut String, byte: u8) {
+    out.push(char::from(BASE16_UPPER[usize::from(byte >> 4)]));
+    out.push(char::from(BASE16_UPPER[usize::from(byte & 0x0f)]));
+}
+
 /// The text is sized exactly up front, so filling it never reallocates.
 fn base16(bytes: &[u8], table: &[u8; 16]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -186,6 +193,16 @@ mod tests {
         assert_eq!(decode_standard("Zm8="), Some(b"fo".to_vec()));
         assert_eq!(decode_standard("Zm8"), Some(b"fo".to_vec()));
         assert_eq!(decode_standard(" Zm9v\r\nYmFy\t"), Some(b"foobar".to_vec()));
+    }
+
+    #[test]
+    fn push_base16_upper_agrees_with_the_whole_buffer_encoder() {
+        let mut pushed = String::new();
+        for byte in 0_u8..=u8::MAX {
+            push_base16_upper(&mut pushed, byte);
+        }
+        let every: Vec<u8> = (0_u8..=u8::MAX).collect();
+        assert_eq!(pushed, base16_upper(&every));
     }
 
     #[test]

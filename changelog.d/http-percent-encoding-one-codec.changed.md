@@ -1,0 +1,1 @@
+Percent-encoding now writes its `%XX` digits through the crate's one Base16 codec (`base64::push_base16_upper`) instead of a second hand-written hex table in `http.rs`.
