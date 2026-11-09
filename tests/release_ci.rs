@@ -1882,11 +1882,12 @@ fn a_release_stamped_installer_never_asks_the_api_for_a_tag() {
 #[test]
 fn install_doc_fetches_the_repository_installer_from_its_real_path() {
     let script = fs::read_to_string(INSTALL).unwrap();
+    // The default repository, which `HUNTSMAN_REPO=OWNER/NAME` can replace for another copy.
     let repo = script
         .lines()
-        .find_map(|line| line.strip_prefix("REPO=\""))
-        .and_then(|rest| rest.strip_suffix('"'))
-        .expect("the installer names its repository");
+        .find_map(|line| line.strip_prefix("REPO=\"${HUNTSMAN_REPO:-"))
+        .and_then(|rest| rest.strip_suffix("}\""))
+        .expect("the installer names its default repository");
     let url = format!("https://raw.githubusercontent.com/{repo}/main/{INSTALL}");
     let doc = fs::read_to_string("docs/INSTALL.md").unwrap();
     let section = doc

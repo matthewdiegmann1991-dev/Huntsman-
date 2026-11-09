@@ -2036,3 +2036,106 @@ fn a_web_ui_that_does_not_answer_is_reported_without_failing_the_install() {
         stdout(&out)
     );
 }
+
+/// `HUNTSMAN_REPO=OWNER/NAME` installs from another copy of the repository, such as a fork: the
+/// pinned revision is resolved and built from that copy, and the install record names it.
+#[test]
+fn another_copy_of_the_repository_installs_from_itself() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let temp = scratch();
+    let install_root = temp.join("install-root");
+    let fake_bin = temp.join("fake-bin");
+    let fake_target_libdir = temp.join("rustlib");
+    let log = temp.join("install.log");
+    let tmpdir = temp.join("tmp");
+    fs::create_dir_all(&tmpdir).unwrap();
+    install_fake_termux_toolchain(&fake_bin, &fake_target_libdir);
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    let rev = "b2731d117009a841c302a124f38a808d36f6eac7";
+    let output = Command::new("bash")
+        .arg(root.join("install.sh"))
+        .env("PATH", format!("{}:{existing_path}", fake_bin.display()))
+        .env("PREFIX", "/data/data/com.termux/files/usr")
+        .env("HUNTSMAN_INSTALL_ROOT", &install_root)
+        .env("INSTALL_LOG", &log)
+        .env("FAKE_RUST_TARGET_LIBDIR", &fake_target_libdir)
+        .env("HUNTSMAN_REV", rev)
+        .env("HUNTSMAN_REPO", "example-owner/Huntsman-")
+        .env("HOME", &temp)
+        .env("TMPDIR", &tmpdir)
+        .env_remove("CARGO_TARGET_DIR")
+        .output()
+        .expect("root installer must execute under bash");
+    assert!(
+        output.status.success(),
+        "installer failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains("cargo install --git https://github.com/example-owner/Huntsman-.git"),
+        "the build must come from the named copy: {calls}"
+    );
+    assert!(
+        !calls.contains("EmmmmDeee"),
+        "nothing may be fetched from the default repository: {calls}"
+    );
+    let record = fs::read_to_string(temp.join(".huntsman/installed-revision")).unwrap();
+    assert!(
+        record.contains("repository=https://github.com/example-owner/Huntsman-.git\n"),
+        "{record}"
+    );
+    let _ = fs::remove_dir_all(&temp);
+}
+
+/// A `HUNTSMAN_REPO` that is not `OWNER/NAME` is refused before anything is fetched or installed:
+/// it is spliced into URLs, so a slash, query or space could point the installer elsewhere.
+#[test]
+fn a_malformed_repository_name_is_refused_before_anything_is_fetched() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for bad in [
+        "no-slash",
+        "owner/name/extra",
+        "owner/name?x=1",
+        "owner/na me",
+        "-owner/name",
+        "owner/",
+        "evil.example/../x",
+    ] {
+        let temp = scratch();
+        let install_root = temp.join("install-root");
+        let fake_bin = temp.join("fake-bin");
+        let fake_target_libdir = temp.join("rustlib");
+        let log = temp.join("install.log");
+        let tmpdir = temp.join("tmp");
+        fs::create_dir_all(&tmpdir).unwrap();
+        install_fake_termux_toolchain(&fake_bin, &fake_target_libdir);
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let output = Command::new("bash")
+            .arg(root.join("install.sh"))
+            .env("PATH", format!("{}:{existing_path}", fake_bin.display()))
+            .env("PREFIX", "/data/data/com.termux/files/usr")
+            .env("HUNTSMAN_INSTALL_ROOT", &install_root)
+            .env("INSTALL_LOG", &log)
+            .env("FAKE_RUST_TARGET_LIBDIR", &fake_target_libdir)
+            .env("HUNTSMAN_REPO", bad)
+            .env("HOME", &temp)
+            .env("TMPDIR", &tmpdir)
+            .output()
+            .expect("root installer must execute under bash");
+        assert!(!output.status.success(), "{bad} was accepted");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("HUNTSMAN_REPO must be OWNER/NAME"),
+            "{bad}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let calls = fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            !calls.contains("curl") && !calls.contains("git ") && !calls.contains("cargo "),
+            "{bad}: something was fetched or built: {calls}"
+        );
+        assert!(!install_root.join("bin/huntsman-recon").exists(), "{bad}");
+        let _ = fs::remove_dir_all(&temp);
+    }
+}

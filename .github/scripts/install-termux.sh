@@ -19,11 +19,16 @@
 # half-written binary behind.
 set -euo pipefail
 
-REPO="EmmmmDeee/Huntsman-Search-Engine-HSE-Termux-Android-Aarch64-Rust-"
+# HUNTSMAN_REPO=OWNER/NAME installs a release published by another copy, such as a fork.
+REPO="${HUNTSMAN_REPO:-EmmmmDeee/Huntsman-Search-Engine-HSE-Termux-Android-Aarch64-Rust-}"
 RECON_TAG_DEFAULT="@RECON_TAG@"
 CHANNEL="${HUNTSMAN_CHANNEL:-recon}"
 
 die() { echo "install-termux: $*" >&2; exit 1; }
+
+if [[ ! "$REPO" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$ ]]; then
+  die "HUNTSMAN_REPO must be OWNER/NAME of a GitHub repository, not: $REPO"
+fi
 
 case "$CHANNEL" in
   hse)

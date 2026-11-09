@@ -29,6 +29,17 @@ HUNTSMAN_REQUIRE_PREBUILT=1 bash "$TMPDIR/huntsman-install.sh"
 ```
 
 To pin an exact main commit, also set `HUNTSMAN_REV` to its full 40-digit SHA.
+To install from another copy of the repository, such as a fork, set
+`HUNTSMAN_REPO` to its `OWNER/NAME`, and fetch `install.sh` from that copy too:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/OWNER/NAME/main/install.sh -o "$TMPDIR/huntsman-install.sh" && HUNTSMAN_REPO=OWNER/NAME bash "$TMPDIR/huntsman-install.sh"
+```
+
+The source build, the prebuilt release and the helper scripts then all come from that copy, and
+`~/.huntsman/installed-revision` names it as `repository=`. A value that is not `OWNER/NAME` is
+refused before anything is fetched. `install-termux.sh` takes the same variable. `doctor`'s
+reinstall hint still names the default repository.
 `HUNTSMAN_REQUIRE_PREBUILT=1` conflicts with `HUNTSMAN_FROM_SOURCE=1` and
 fails before any source build. This preserves default installer behaviour for
 operators who intentionally choose a source build. A *completed install* is

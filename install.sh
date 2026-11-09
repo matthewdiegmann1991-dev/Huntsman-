@@ -2,9 +2,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly REPO="https://github.com/EmmmmDeee/Huntsman-Search-Engine-HSE-Termux-Android-Aarch64-Rust-.git"
+# The GitHub repository everything is installed from: the source build, the prebuilt release and
+# the helper scripts. HUNTSMAN_REPO=OWNER/NAME installs from another copy, such as a fork; it is
+# checked below before anything is fetched.
+readonly REPO_SLUG="${HUNTSMAN_REPO:-EmmmmDeee/Huntsman-Search-Engine-HSE-Termux-Android-Aarch64-Rust-}"
+readonly REPO="https://github.com/${REPO_SLUG}.git"
 readonly TERMUX_PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
-readonly REPO_SLUG="EmmmmDeee/Huntsman-Search-Engine-HSE-Termux-Android-Aarch64-Rust-"
 readonly ASSET="huntsman-recon-aarch64-linux-android"
 # Where the binary goes: $INSTALL_ROOT/bin, for a prebuilt and a source build alike.
 readonly INSTALL_ROOT="${HUNTSMAN_INSTALL_ROOT:-$TERMUX_PREFIX}"
@@ -54,6 +57,12 @@ die() {
   printf 'error: %s\n' "$*" >&2
   exit 1
 }
+
+# A GitHub owner is up to 39 letters, digits and hyphens; a repository name is letters, digits,
+# '.', '_' and '-'. Anything else could rewrite the URLs built from it.
+if [[ ! "$REPO_SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$ ]]; then
+  die "HUNTSMAN_REPO must be OWNER/NAME of a GitHub repository, not: $REPO_SLUG"
+fi
 
 if ! command -v pkg >/dev/null 2>&1; then
   die "Termux pkg command not found; run this installer inside Termux"
