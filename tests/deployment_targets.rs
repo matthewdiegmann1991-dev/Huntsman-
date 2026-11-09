@@ -202,3 +202,40 @@ fn retired_managed_hosting_files_are_absent_from_current_project() {
         );
     }
 }
+
+/// A container rebuild for a new commit, which every deploy is, reuses the compiled dependencies.
+/// Docker reuses a layer only while every step before it is unchanged: the dependency build must
+/// come before the sources are copied and before the per-commit build arguments are declared
+/// (an `ARG` invalidates the cache of every step after it). The final build must remove the
+/// stub build's artifacts for the crate itself, or COPY's preserved, older timestamps could let
+/// Cargo keep the stub.
+#[test]
+fn container_dependencies_compile_in_a_layer_a_new_commit_keeps() {
+    let docker = fs::read_to_string("Dockerfile").expect("root Dockerfile must exist");
+    let builder = &docker[..docker
+        .find("FROM debian:trixie-slim@")
+        .expect("the runtime stage")];
+    let position = |needle: &str| {
+        builder
+            .find(needle)
+            .unwrap_or_else(|| panic!("the builder stage must contain {needle:?}"))
+    };
+    let manifests = position("COPY Cargo.toml Cargo.lock ./");
+    let dependencies = position("cargo build --release --locked --bin huntsman-recon \\\n    && rm -rf src xtask/src");
+    let sources = position("COPY src ./src");
+    let build_argument = position("ARG HUNTSMAN_BUILD_SHA=unknown");
+    let source_argument = position("ARG HUNTSMAN_SOURCE_SHA");
+    let final_build = position("cargo clean --release --package huntsman-recon");
+    assert!(manifests < dependencies, "the manifests come before the dependency build");
+    assert!(dependencies < sources, "the dependency build comes before the sources");
+    assert!(
+        dependencies < build_argument && dependencies < source_argument,
+        "a per-commit build argument declared before the dependency build invalidates it"
+    );
+    assert!(sources < final_build, "the crate is rebuilt from its real sources last");
+    assert_eq!(
+        builder.matches("COPY src ").count(),
+        1,
+        "the sources are copied once, after the dependency layer"
+    );
+}
