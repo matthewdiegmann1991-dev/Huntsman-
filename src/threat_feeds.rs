@@ -389,6 +389,12 @@ pub fn subjects(first: Subject, entities: &[Entity]) -> Vec<Subject> {
 
 /// Check `target` and every address, host name and address block among `entities` against the
 /// feeds: each listing joins `entities`, and each source's row joins `outcomes`.
+///
+/// A listing says a feed names the subject; it says nothing about how strongly that subject links
+/// to what was looked up. So a name the lookup found keeps the confidence its finder gave it: the
+/// listing adds its evidence and tag when the entities merge, never a stronger link. A listing of
+/// a name nothing found (the target itself when it is not yet an entity) keeps the listing's own
+/// confidence.
 pub fn check_found(
     feeds: &Feeds,
     target: Subject,
@@ -398,7 +404,12 @@ pub fn check_found(
     now_unix: u64,
 ) {
     let subjects = subjects(target, entities);
-    let (listed, rows) = check(feeds, &subjects, scan_id, now_unix);
+    let (mut listed, rows) = check(feeds, &subjects, scan_id, now_unix);
+    for listing in &mut listed {
+        if let Some(found) = entities.iter().find(|entity| entity.uid == listing.uid) {
+            listing.confidence = listing.confidence.min(found.confidence);
+        }
+    }
     entities.extend(listed);
     outcomes.extend(rows);
 }
