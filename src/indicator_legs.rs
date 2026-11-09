@@ -58,7 +58,7 @@ const SEED_CONFIDENCE: f64 = 0.90;
 const PIVOT_CONFIDENCE: f64 = 0.60;
 /// An incidental pivot: a provider named it beside the indicator without linking it. Below
 /// [`crate::gap::EXPAND_FLOOR`], so a recursive scan never follows it; kept with its evidence.
-const INCIDENTAL_CONFIDENCE: f64 = 0.40;
+pub const INCIDENTAL_CONFIDENCE: f64 = 0.40;
 
 /// One source's answer: what it found, nothing, or why it could not say.
 type Answer = Result<Option<Finding>, crate::api_leg::LegError>;

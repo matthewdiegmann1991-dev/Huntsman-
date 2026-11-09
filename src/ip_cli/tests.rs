@@ -927,3 +927,97 @@ fn more_cohosts_than_the_cap_make_the_address_shared_hosting_and_its_names_no_pi
         }
     }
 }
+
+#[test]
+fn a_name_that_merely_co_occurred_with_the_address_is_not_a_cohost() {
+    use crate::indicator_legs::INCIDENTAL_CONFIDENCE;
+    let scan = "cohost-scan";
+    let found = |summary: &str| Evidence::new(EvidenceProvenance::for_scan("test", scan), summary);
+    for (linked, shared) in [(MAX_COHOSTS, false), (MAX_COHOSTS + 1, true)] {
+        let mut report = Report::default();
+        for n in 0..linked {
+            push_entity(
+                &mut report.entities,
+                EntityKind::Domain,
+                &format!("site{n}.example"),
+                PIVOT_CONFIDENCE,
+                scan,
+                found("passive DNS saw the name resolve to the address"),
+                &[],
+            );
+        }
+        // Twice the cap of pages that merely involved the address in a public scan.
+        for n in 0..(2 * MAX_COHOSTS) {
+            push_entity(
+                &mut report.entities,
+                EntityKind::Domain,
+                &format!("page{n}.example"),
+                INCIDENTAL_CONFIDENCE,
+                scan,
+                found("Page domain in a urlscan.io scan involving the indicator"),
+                &[crate::tags::INCIDENTAL],
+            );
+        }
+        push_entity(
+            &mut report.entities,
+            EntityKind::Domain,
+            "one.one.one.one",
+            PTR_CONFIDENCE,
+            scan,
+            found("PTR"),
+            &[crate::tags::PTR],
+        );
+        cap_cohosts(&mut report, "1.1.1.1", scan);
+        let address = report
+            .entities
+            .iter()
+            .find(|e| e.kind == EntityKind::IpAddress && e.raw_value == "1.1.1.1");
+        match address {
+            Some(address) => {
+                assert!(shared, "{linked} linked names are not shared hosting");
+                assert!(address.has_tag(crate::tags::SHARED_HOSTING));
+                let counted = address
+                    .evidence
+                    .iter()
+                    .find(|e| e.attributes.contains_key("cohosts"))
+                    .unwrap_or_else(|| {
+                        panic!("the address must say how many names resolved to it")
+                    });
+                assert_eq!(counted.attributes["cohosts"], linked.to_string());
+            }
+            None => assert!(!shared, "{linked} linked names are shared hosting"),
+        }
+        for entity in &report.entities {
+            if entity.kind != EntityKind::Domain {
+                continue;
+            }
+            let value = entity.raw_value.as_str();
+            if value.starts_with("site") {
+                assert_eq!(
+                    entity.has_tag(crate::tags::SHARED_HOSTING),
+                    shared,
+                    "{value}"
+                );
+                assert_eq!(
+                    entity.confidence < crate::gap::EXPAND_FLOOR,
+                    shared,
+                    "{value} at {}",
+                    entity.confidence
+                );
+            } else {
+                // An incidental page and the PTR name are not co-hosts: untouched either way.
+                assert!(!entity.has_tag(crate::tags::SHARED_HOSTING), "{value}");
+                let expected = if value.starts_with("page") {
+                    INCIDENTAL_CONFIDENCE
+                } else {
+                    PTR_CONFIDENCE
+                };
+                assert!(
+                    (entity.confidence - expected).abs() < f64::EPSILON,
+                    "{value} at {}",
+                    entity.confidence
+                );
+            }
+        }
+    }
+}
