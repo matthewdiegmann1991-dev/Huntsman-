@@ -1,4 +1,5 @@
-//! One command surface. `cli::run` dispatches each command word; `--help` lists it with a
+//! One command surface. `cli::run` dispatches each command word through the registry in
+//! `src/cli/commands.rs`; `--help` lists it with a
 //! summary, the usage line names it, and `COMMAND --help` prints that command's own help. A word
 //! the dispatcher accepts that one of them leaves out is a command no one can find, and
 //! `tests/readme.rs` only ties the usage line to the README.
@@ -15,21 +16,17 @@ fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_huntsman-recon"))
 }
 
-/// The command words `cli::run` matches, read from its dispatch.
+/// The command words `cli::run` dispatches, read from the one registry it dispatches through.
 fn dispatched() -> BTreeSet<String> {
-    let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/cli/mod.rs"))
-        .expect("src/cli/mod.rs");
-    let dispatch = source
-        .split("match remaining.next().as_deref() {")
-        .nth(1)
-        .expect("cli::run dispatches on the first argument");
-    let words: BTreeSet<String> = dispatch
-        .split("Some(\"")
-        .skip(1)
+    let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/cli/commands.rs"))
+        .expect("src/cli/commands.rs");
+    let words: BTreeSet<String> = source
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("name: \""))
         .filter_map(|rest| rest.split('"').next())
         .map(str::to_owned)
         .collect();
-    assert!(words.len() > 20, "dispatch parse found only {words:?}");
+    assert!(words.len() > 20, "registry parse found only {words:?}");
     words
 }
 
@@ -123,20 +120,26 @@ fn no_command_prints_the_help_to_stderr_and_writes_nothing() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Every dispatched command is handed all of its arguments. An arm that takes only the next one or
-/// two leaves the rest unread, and the command then runs on part of what was typed.
+/// Every dispatched command is handed all of its arguments. The dispatcher takes the command word
+/// and hands the whole remainder to the registry's handler; one that took only the next argument or
+/// two would leave the rest unread, and the command would run on part of what was typed.
 #[test]
 fn every_command_is_handed_all_of_its_arguments() {
     let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/cli/mod.rs"))
         .expect("src/cli/mod.rs");
     let dispatch = source
-        .split("match remaining.next().as_deref() {")
+        .split("let Some(name) = words.next() else {")
         .nth(1)
-        .expect("cli::run dispatches on the first argument");
-    let dispatch = &dispatch[..dispatch.find("\n    }\n").expect("end of the dispatch")];
+        .expect("cli::run takes the command word first");
+    let dispatch = &dispatch[..dispatch.find("\n}\n").expect("end of cli::run")];
     assert!(
-        !dispatch.contains("remaining.next()"),
-        "a dispatch arm reads single arguments, so the rest are dropped:\n{dispatch}"
+        dispatch.contains("let args: Vec<String> = words.collect();")
+            && dispatch.contains("(command.run)(&args)"),
+        "the dispatcher no longer hands each command the rest of the line:\n{dispatch}"
+    );
+    assert!(
+        !dispatch.contains("words.next()"),
+        "the dispatcher reads single arguments, so the rest are dropped:\n{dispatch}"
     );
 }
 

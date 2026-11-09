@@ -388,7 +388,8 @@ jobs:
           # legacy hse), `verify LEDGER` and the closing `]`; `.*` after
           # `verify LEDGER` tolerates commands listed after it so adding one does
           # not break this probe. tests/release_ci.rs ties this pattern to the
-          # live USAGE constant.
+          # usage line the command registry (src/cli/commands.rs) compiles into
+          # the binary as one literal, and checks the binary holds it.
           usage="$(strings -a -n 8 "dist/$ASSET" | grep -o -m1 'usage: huntsman-recon \[check.*verify LEDGER.*\]' || true)"
           [ -n "$usage" ] || { echo "::error::dist/${ASSET} does not contain the huntsman-recon usage line"; exit 1; }
           # Capture first: `strings | grep -q` under pipefail reports SIGPIPE (141)

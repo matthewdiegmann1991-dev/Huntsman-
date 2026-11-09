@@ -39,7 +39,7 @@ pub(super) fn unknown_command(other: &str) -> ExitCode {
 
 /// Usage error for no command at all: the help on stderr, and nothing written.
 pub(super) fn no_command() -> ExitCode {
-    usage_error(HELP, USAGE)
+    usage_error(&*HELP, USAGE)
 }
 
 /// Usage error for an argument that is not UTF-8. The bytes are not echoed: an argument can

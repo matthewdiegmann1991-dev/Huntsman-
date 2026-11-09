@@ -4009,9 +4009,9 @@ fn release_reads_of_the_latest_tag_fail_on_anything_but_a_missing_tag() {
     );
 }
 
-/// The identity probe in release.yml greps the aarch64 binary for the hand-written usage line to
-/// prove it is huntsman-recon, not the legacy hse. Its pattern is hand-maintained, so a change to
-/// the `USAGE` constant can silently stop it matching (as appending `correlate`/`run-history`
+/// The identity probe in release.yml greps the aarch64 binary for the usage line to prove it is
+/// huntsman-recon, not the legacy hse. Its pattern is hand-maintained, so a change to the command
+/// registry's usage line can silently stop it matching (as appending `correlate`/`run-history`
 /// after `verify LEDGER` did, failing #908's aarch64 build). This ties the two together.
 fn identity_probe_pattern() -> String {
     let wf = release();
@@ -4023,13 +4023,30 @@ fn identity_probe_pattern() -> String {
     rest[..rest.find('\'').expect("the grep pattern is single-quoted")].to_owned()
 }
 
+/// The usage line as the probe sees it: the binary's own bytes. The registry in
+/// `src/cli/commands.rs` builds the line at compile time with `concat!`, so the binary must hold
+/// it as one contiguous string; a line assembled at run time would print the same `--help` and
+/// still fail the release probe, which greps the binary rather than running it.
 fn live_usage_line() -> String {
-    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cli/mod.rs"))
-        .expect("src/cli/mod.rs");
-    let marker = "const USAGE: &str = \"";
-    let start = src.find(marker).expect("USAGE constant") + marker.len();
-    let rest = &src[start..];
-    rest[..rest.find("\";").expect("USAGE string end")].to_owned()
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_huntsman-recon"))
+        .arg("--help")
+        .output()
+        .expect("huntsman-recon --help");
+    let printed = String::from_utf8(help.stdout).expect("--help is UTF-8");
+    let usage = printed
+        .lines()
+        .find(|line| line.starts_with("usage: huntsman-recon ["))
+        .expect("--help ends with the usage line")
+        .to_owned();
+    let binary = fs::read(env!("CARGO_BIN_EXE_huntsman-recon")).expect("the built binary");
+    assert!(
+        binary
+            .windows(usage.len())
+            .any(|window| window == usage.as_bytes()),
+        "the binary does not hold its usage line as one literal string, so the release identity \
+         probe (strings | grep) cannot find it"
+    );
+    usage
 }
 
 /// Whether a basic-regexp `pattern` using only `.*` and `\[`/`\]` escapes matches somewhere in
