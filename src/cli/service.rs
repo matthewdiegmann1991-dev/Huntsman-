@@ -39,7 +39,7 @@ fn bad_selector(message: &str) -> LookupError {
 
 /// `/api/analyze`: the offline investigation spine on the seeds, as `plan` runs it, bridged to the
 /// saved scans in `history` when `serve --history` gave one.
-fn web_analyze(
+pub(super) fn web_analyze(
     seeds: &[String],
     history: Option<&ArtifactHistory>,
 ) -> Result<serde_json::Value, LookupError> {
@@ -161,7 +161,7 @@ fn web_inspect(label: &str, bytes: &[u8]) -> Result<LookupReport, LookupError> {
 /// `/api/investigate`: the `investigate` command over the text the page sends, as one report. The
 /// classifier makes no request, so the report has no outcomes; each entity carries the
 /// classifier's evidence naming the signal that found it.
-fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
+pub(super) fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
     let entities = investigate_entities(text);
     let text =
         huntsman_recon::lookup_report::render(&entities, &[]).map_err(|message| LookupError {

@@ -18,7 +18,8 @@ so an MCP client (Claude Desktop, Claude Code, Cursor and other LLM applications
 binary as a tool. One JSON-RPC message per line in each direction; nothing else is written to \
 standard output. Tools: lookup (every typed lookup and the public news, notices, web and \
 dossier searches), people_discover and research, each running exactly as serve's JSON API runs \
-it, with the same keys and the same public-only egress. Register it with a client by its \
+it, with the same keys and the same public-only egress; and investigate (the selectors in a \
+text) and analyze (the offline multi-hop analysis of up to 16 seeds), which make no request. Register it with a client by its \
 absolute path, for example: claude mcp add huntsman -- /path/to/huntsman-recon mcp. Makes \
 network requests when a tool is called; none at start-up.";
 
@@ -45,6 +46,17 @@ impl Tools for Live {
 
     fn research(&self, query: &str) -> Result<Value, ToolError> {
         super::service::web_research(query).map_err(refusal)
+    }
+
+    fn investigate(&self, text: &str) -> Result<Value, ToolError> {
+        let report = super::service::web_investigate(text).map_err(refusal)?;
+        serde_json::to_value(report)
+            .map_err(|error| format!("report could not be encoded: {error}"))
+    }
+
+    fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError> {
+        // No saved-scan history: `serve --history DIR` bridges one, this server has no directory.
+        super::service::web_analyze(seeds, None).map_err(refusal)
     }
 }
 
