@@ -40,9 +40,9 @@ use crate::username_variants::{VARIANT_CONFIDENCE, variants};
 use crate::validation::{ValueKind, is_placeholder_entity};
 use crate::wikipedia;
 
-pub const USERNAME_USAGE: &str = "usage: huntsman-recon username HANDLE [--save FILE]";
+pub const USERNAME_USAGE: &str = "usage: huntsman-recon username HANDLE [--save FILE] [--json]";
 pub const USERNAME_HELP: &str = "\
-username HANDLE [--save FILE]
+username HANDLE [--save FILE] [--json]
 Derive handle variants and query public GitHub profiles and repositories, GitLab, Bluesky, Keybase, Mastodon, npm registry authorship, crates.io crate ownership, Hacker News accounts, Lobsters accounts, Chess.com and Lichess accounts, TikTok self-published bio contacts and Wikipedia contributions. Email contacts are self-declared candidates, never verified account email owners. --save FILE writes an unverified ledger that verify can reload.";
 
 /// One source's answer: what it found and its outcome, or the refusal that stopped it.

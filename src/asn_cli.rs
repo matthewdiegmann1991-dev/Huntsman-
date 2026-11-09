@@ -38,9 +38,9 @@ use crate::source_outcome::{
     EndpointAnswer, Joined, SourceExecutionOutcome, SourceOutcomeKind, SourceReach, SourceRun,
 };
 
-pub const ASN_USAGE: &str = "usage: huntsman-recon asn AS-NUMBER [--save FILE]";
+pub const ASN_USAGE: &str = "usage: huntsman-recon asn AS-NUMBER [--save FILE] [--json]";
 pub const ASN_HELP: &str = "\
-asn AS-NUMBER [--save FILE]
+asn AS-NUMBER [--save FILE] [--json]
 Look up one public autonomous system, written AS13335, ASN13335 or 13335: its RDAP registration (the record as published, its holder and contacts), its holder and registry block, every prefix it announces with the windows it was seen (each an address block), every public AS adjacent to it in BGP paths with its side, and its PeeringDB profile (its operator organisation, website, peering policy and traffic) with every peering address it publishes at a public Internet exchange (each an IP pivot), all keyless from RDAP, RIPEstat and PeeringDB. A reserved, private-use or documentation AS number is refused before any request. --save FILE writes an unverified ledger that verify can reload. Makes network requests.";
 
 /// The largest answer read for one call: the announced prefixes of the largest networks run to

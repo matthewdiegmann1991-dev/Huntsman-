@@ -35,9 +35,9 @@ use crate::source_outcome::{SourceExecutionOutcome, SourceReach, SourceRun};
 use crate::textnorm::upper_first;
 use crate::{duolingo, openpgp_keys};
 
-pub const EMAIL_USAGE: &str = "usage: huntsman-recon email ADDR [--save FILE]";
+pub const EMAIL_USAGE: &str = "usage: huntsman-recon email ADDR [--save FILE] [--json]";
 pub const EMAIL_HELP: &str = "\
-email ADDR [--save FILE]
+email ADDR [--save FILE] [--json]
 Canonicalise ADDR, derive deterministic email pivots, and query its public Gravatar profile, any Duolingo account registered to it, and any OpenPGP key published for it on keys.openpgp.org. Kickbox Open says, from the domain alone, whether it is a disposable-mail provider. StopForumSpam forum-spam reports and the names of public breaches XposedOrNot lists for the address are asked without a key. Each keyed source runs when its key is set: IPQualityScore (HUNTSMAN_IPQS_KEY), the Hunter.io verifier (HUNTSMAN_HUNTER_KEY) and Whoxy reverse WHOIS (HUNTSMAN_WHOXY_KEY). --save FILE writes an unverified ledger that verify can reload.";
 
 const CONF_DOMAIN: f64 = 0.80;

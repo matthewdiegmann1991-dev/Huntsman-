@@ -644,6 +644,13 @@ In Claude Desktop, Cursor or another client that reads an `mcpServers` file:
 
 In Termux the path is `$PREFIX/bin/huntsman-recon` after `install.sh`. A client running in Termux, or one that reaches the phone over SSH (`"command": "ssh", "args": ["phone", "huntsman-recon", "mcp"]`), runs it as is, with no root.
 
+An agent that runs shell commands instead of speaking MCP (Codex, Gemini CLI, a code-execution sandbox, a script) gets the same report from any typed lookup with `--json`: `people`, `email`, `exposure`, `username`, `phone`, `domain`, `ip`, `netblock`, `asn`, `network`, `crypto` and `geocode` print one JSON object on one line, the shape `GET /api/lookup` and `lookup` with `detail: "full"` return, and nothing else on standard output. With `--save FILE` the ledger's receipt is a `saved` object (`path`, `entries`, `tip`) inside it instead of extra lines. Errors stay on standard error with the command's exit status.
+
+```sh
+huntsman-recon domain example.com --json | jq '.outcomes[] | {module, kind}'
+```
+
+
 ### Batch scan input
 
 `scan --input-file FILE [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save-dir DIR]` accepts UTF-8 files up to 1 MiB with one target per line. Blank lines and lines whose trimmed form starts with `#` are ignored; exact duplicate seeds keep only their first occurrence. A batch is capped at 1000 unique seeds, every accepted seed is attempted even after an earlier failure, and the process exits non-zero after completion if any seed failed. Batch `--save` is refused; `--save-dir DIR` writes one ledger per seed instead, named by the seed's position and the seed reduced to safe filename characters (`0001-<seed>.json`), so no seed can overwrite another seed's ledger.

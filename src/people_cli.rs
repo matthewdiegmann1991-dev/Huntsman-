@@ -26,9 +26,9 @@ use crate::source_outcome::{SourceExecutionOutcome, SourceOutcomeKind, SourceRea
 use crate::textnorm::name_tokens;
 use crate::wikidata;
 
-pub const PEOPLE_USAGE: &str = "usage: huntsman-recon people NAME [--save FILE]";
+pub const PEOPLE_USAGE: &str = "usage: huntsman-recon people NAME [--save FILE] [--json]";
 pub const PEOPLE_HELP: &str = "\
-people NAME [--save FILE]
+people NAME [--save FILE] [--json]
 Look up NAME on the keyless ASIC people and director registers, Wikidata, the ACNC charity register, SEC EDGAR, the OFAC, UN and EU sanctions lists (kept on the device), ICIJ Offshore Leaks nodes and FBI wanted notices that name every word of NAME. Fewer than two alphabetic tokens makes no request. One source failure does not abort the others. --save FILE writes an unverified ledger that verify can reload; skip does not write.
 
 The lookup queries independent sources:

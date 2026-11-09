@@ -14,10 +14,9 @@ use crate::lookup_report;
 use crate::nominatim;
 use crate::source_outcome::{SourceExecutionOutcome, SourceRun};
 
-pub const GEOCODE_USAGE: &str =
-    "usage: huntsman-recon geocode PLACE-OR-ADDRESS [--save FILE] | geocode LAT,LON [--save FILE]";
+pub const GEOCODE_USAGE: &str = "usage: huntsman-recon geocode PLACE-OR-ADDRESS [--save FILE] [--json] | geocode LAT,LON [--save FILE] [--json]";
 pub const GEOCODE_HELP: &str = "\
-geocode QUERY [--save FILE]
+geocode QUERY [--save FILE] [--json]
 Geocode one query through OpenStreetMap's Nominatim, keyless. A `lat,lon` point is reverse-geocoded to the address at that spot, and the keyless Earth Search STAC catalogue is asked which Sentinel-2 and Landsat scenes covered it in the last 90 days, newest first, at most ten, each a catalogue record with its collection, platform, acquisition time, cloud cover, footprint and thumbnail (a satellite pass, not what the imagery shows; its footprint is an area, not the point), and the keyless OpenSky Network is asked which aircraft its receivers last reported within half a degree of it, nearest first, at most fifty, each a transponder address with its callsign, position and reporting time, altitude, speed, track and squawk (an airframe, not anyone aboard, and not where it is now; OpenSky data is for non-commercial research); any other text is a place name or street address, forward-geocoded to the coordinates and address of each match (at most ten). Each match becomes a coordinates entity for its point and an address entity for its written address, with every field Nominatim returns -- each separate address component included -- kept as evidence. --save FILE writes an unverified ledger that verify can reload. The same lookup is the geocode scan kind: scan QUERY -k geocode, scans run QUERY -k geocode and the web UI's Place target type run it and save it as a scan, whose written addresses are PHYSICAL_ADDRESS elements and whose points are PHYSICAL_COORDINATES; no target is routed to it on its own, since free text is a name and LAT,LON a WiFi area to scan. Makes network requests. Nominatim permits one request per second across the application. Data © OpenStreetMap contributors, ODbL 1.0. Configure HUNTSMAN_NOMINATIM_BASE_URL to select an operator-managed HTTPS service.";
 
 /// The longest query a geocode takes, in bytes. A longer string is not an address a gazetteer

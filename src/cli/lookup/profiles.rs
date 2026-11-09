@@ -51,6 +51,7 @@ use huntsman_recon::stolen_tax;
 use huntsman_recon::textnorm::escape_controls;
 use huntsman_recon::threat_feeds::{self, Feeds};
 use huntsman_recon::username_cli::{USERNAME_USAGE, UsernameArgs, UsernameRun};
+use huntsman_recon::web_server::{LookupReport, lookup_json};
 use huntsman_recon::wigle;
 use huntsman_recon::wikidata_cli::{self, WIKIDATA_USAGE, WikidataArgs};
 
@@ -614,10 +615,48 @@ fn usage_failure(error: &Error, usage: &str) -> ExitCode {
     fail(argument_status(error), &format!("{error}\n{usage}"))
 }
 
+/// What every typed lookup command's `--help` adds: the one JSON shape `--json` prints.
+pub(in crate::cli) const JSON_NOTE: &str = "--json prints the report as one JSON object on one \
+line instead of the text report: the shape GET /api/lookup and the MCP lookup tool (detail: full) \
+return, with route, text, entities, outcomes and synergy, and with --save a saved object holding \
+the ledger's path, entries and tip. Nothing else is written to standard output.";
+
+/// Whether `command` is a typed lookup, one that takes `--json`: the commands of
+/// [`ScanKind::ALL`], every one of which runs through [`finish`].
+pub(in crate::cli) fn takes_json(command: &str) -> bool {
+    ScanKind::ALL.iter().any(|kind| kind.command() == command)
+}
+
+/// `args` without its `--json`, and whether it was there. A second `--json` is refused.
+fn take_json(args: &[String]) -> Result<(Vec<String>, bool), Error> {
+    let mut rest = Vec::with_capacity(args.len());
+    let mut json = false;
+    for arg in args {
+        if arg == "--json" {
+            if json {
+                return Err(Error::Invalid("only one --json".into()));
+            }
+            json = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    Ok((rest, json))
+}
+
+/// How a finished lookup is printed: the text report, or one JSON object.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Output {
+    Text,
+    Json,
+}
+
 /// Saves the report when `--save` was given, then prints it. A store failure exits 74 and any
 /// other save failure exits 65. Without `--save`, nothing is written. The save comes first so a
 /// reader that stops early, which ends the process at the next print, cannot cost the ledger.
-fn finish(kind: ScanKind, selector: &str, save: Option<&Path>) -> ExitCode {
+/// With [`Output::Json`] the report and the save's receipt are one JSON object, the shape
+/// `/api/lookup` answers, so standard output holds that object alone.
+fn finish(kind: ScanKind, selector: &str, save: Option<&Path>, output: Output) -> ExitCode {
     let collected = match collect(kind, selector, &Selection::all()) {
         Ok(collected) => collected,
         Err(refused) => return fail(refused.exit_status(), refused.message()),
@@ -633,6 +672,9 @@ fn finish(kind: ScanKind, selector: &str, save: Option<&Path>) -> ExitCode {
         );
         (path, entries)
     });
+    if output == Output::Json {
+        return print_json(kind, collected, saved);
+    }
     print!("{}", collected.text);
     let Some((path, entries)) = saved else {
         return ExitCode::SUCCESS;
@@ -652,6 +694,45 @@ fn finish(kind: ScanKind, selector: &str, save: Option<&Path>) -> ExitCode {
     }
 }
 
+type SaveResult<'a> = Option<(
+    &'a Path,
+    Result<Vec<huntsman_recon::ledger::LedgerEntry>, Error>,
+)>;
+
+/// The `--json` form of [`finish`]: the report as `/api/lookup` encodes it, with a `saved`
+/// receipt when a ledger was written. A save that failed still prints the report, then exits
+/// with the save's status, as the text form does.
+fn print_json(kind: ScanKind, collected: Collected, saved: SaveResult<'_>) -> ExitCode {
+    let report = LookupReport {
+        route: kind.command(),
+        text: collected.text,
+        entities: collected.entities,
+        outcomes: collected.outcomes,
+        scan: None,
+        status: None,
+    };
+    let mut value = match lookup_json(&report) {
+        Ok(value) => value,
+        Err(error) => return fail(EX_DATAERR, &format!("report could not be encoded: {error}")),
+    };
+    let mut status = ExitCode::SUCCESS;
+    if let Some((path, entries)) = saved {
+        match entries {
+            Ok(entries) => {
+                value["saved"] = serde_json::json!({
+                    "path": path.display().to_string(),
+                    "entries": entries.len(),
+                    "tip": entries.last().map(|entry| entry.hash.clone()),
+                });
+            }
+            Err(Error::Store(message)) => status = fail(EX_IOERR, &message),
+            Err(error) => status = fail(EX_DATAERR, &error.to_string()),
+        }
+    }
+    println!("{value}");
+    status
+}
+
 /// Parse one lookup command's arguments, then run it for the scan kind they name. A rejected
 /// argument is a usage error carrying the command's usage text, so every lookup command rejects
 /// its arguments the same way.
@@ -661,18 +742,28 @@ fn lookup_cmd<A>(
     usage: &str,
     select: impl FnOnce(A) -> (ScanKind, String, Option<PathBuf>),
 ) -> ExitCode {
-    match parse(args) {
+    let (args, json) = match take_json(args) {
+        Ok(taken) => taken,
+        Err(e) => return usage_failure(&e, usage),
+    };
+    let output = if json { Output::Json } else { Output::Text };
+    match parse(&args) {
         Ok(parsed) => {
             let (kind, selector, save) = select(parsed);
-            finish(kind, &selector, save.as_deref())
+            finish(kind, &selector, save.as_deref(), output)
         }
         Err(e) => usage_failure(&e, usage),
     }
 }
 
 pub(in crate::cli) fn people_cmd(args: &[String]) -> ExitCode {
-    match PeopleArgs::parse(args) {
-        Ok(p) => finish(ScanKind::People, &p.name, p.save.as_deref()),
+    let (args, json) = match take_json(args) {
+        Ok(taken) => taken,
+        Err(e) => return usage_error(e, PEOPLE_USAGE),
+    };
+    let output = if json { Output::Json } else { Output::Text };
+    match PeopleArgs::parse(&args) {
+        Ok(p) => finish(ScanKind::People, &p.name, p.save.as_deref(), output),
         Err(e) => usage_error(e, PEOPLE_USAGE),
     }
 }
