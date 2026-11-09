@@ -86,13 +86,13 @@ fn json_keeps_the_commands_argument_errors() {
         .output()
         .unwrap();
     assert_eq!(twice.status.code(), Some(i32::from(EX_USAGE)));
-    assert!(twice.stdout.is_empty());
+    assert_eq!(String::from_utf8_lossy(&twice.stdout), "");
     let bad = bin(&home)
         .args(["email", "not an address", "--json"])
         .output()
         .unwrap();
     assert_eq!(bad.status.code(), Some(i32::from(EX_DATAERR)));
-    assert!(bad.stdout.is_empty());
+    assert_eq!(String::from_utf8_lossy(&bad.stdout), "");
 }
 
 #[test]

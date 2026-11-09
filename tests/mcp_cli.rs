@@ -98,7 +98,7 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
 fn mcp_takes_no_arguments_and_documents_itself() {
     let out = mcp(&["--bind", "x"]).output().unwrap();
     assert_eq!(out.status.code(), Some(i32::from(EX_USAGE)));
-    assert!(out.stdout.is_empty());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
     let help = mcp(&["--help"]).output().unwrap();
     assert_eq!(help.status.code(), Some(0));
     let text = String::from_utf8(help.stdout).unwrap();
@@ -109,6 +109,6 @@ fn mcp_takes_no_arguments_and_documents_itself() {
 #[test]
 fn closing_input_ends_the_server_cleanly() {
     let (answers, stderr, code) = session(&[]);
-    assert!(answers.is_empty());
+    assert_eq!(answers, Vec::<Value>::new());
     assert_eq!(code, Some(0), "{stderr}");
 }
