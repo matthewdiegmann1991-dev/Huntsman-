@@ -17,6 +17,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::api_leg::{self, Api, Distinct, KeyPlace, KeyUse, LegError};
+use crate::canonical::{canonical_domain, canonical_ip};
+use crate::domains::is_or_subdomain_of;
 use crate::http::{Transport, percent_encode_component};
 use crate::indicator_sources::{Finding, Indicator, IndicatorKind, PivotKind, Source};
 use crate::keys::Keys;
@@ -241,47 +243,127 @@ impl Scans {
     }
 }
 
-/// The domains, addresses and networks a scan names, except the indicator itself. **Pure.**
+/// Whether a scan's final page was on the indicator: for a domain, the page's domain is the
+/// indicator or a name under it; for an address, the page was served from it. **Pure.**
+fn on_indicator(page: &Page, indicator: Indicator<'_>) -> bool {
+    match indicator {
+        Indicator::Domain(domain) => page
+            .domain
+            .as_deref()
+            .and_then(canonical_domain)
+            .is_some_and(|name| is_or_subdomain_of(&name, domain)),
+        Indicator::Ip(ip) => page.ip.as_deref().and_then(canonical_ip) == canonical_ip(ip),
+        _ => false,
+    }
+}
+
+/// Whether a submitted domain is the indicator or a name under it. **Pure.**
+fn under_indicator(domain: &str, indicator: Indicator<'_>) -> bool {
+    match indicator {
+        Indicator::Domain(apex) => {
+            canonical_domain(domain).is_some_and(|name| is_or_subdomain_of(&name, apex))
+        }
+        _ => false,
+    }
+}
+
+/// The domain a scan was submitted for, if the scan says. **Pure.**
+fn submitted(scan: &Scan) -> Option<&str> {
+    scan.task.as_ref().and_then(|task| task.domain.as_deref())
+}
+
+/// What a scan's final page names, in a fixed order: its domain, the address serving it, that
+/// address's AS and the AS holder. Each comes with two summaries: the first for a page on the
+/// indicator, the second for a page that merely involved it. **Pure.**
+fn page_pivots(page: &Page) -> [(PivotKind, Option<&str>, &'static str, &'static str); 4] {
+    [
+        (
+            PivotKind::Domain,
+            page.domain.as_deref(),
+            "Page domain of a urlscan.io scan of a page on the indicator",
+            "Page domain in a urlscan.io scan involving the indicator",
+        ),
+        (
+            PivotKind::Ip,
+            page.ip.as_deref(),
+            "Address serving the indicator's page in a urlscan.io scan",
+            "Page address in a urlscan.io scan involving the indicator",
+        ),
+        (
+            PivotKind::Asn,
+            page.asn.as_deref(),
+            "AS serving the indicator's page in a urlscan.io scan",
+            "AS serving a page in a urlscan.io scan involving the indicator",
+        ),
+        (
+            PivotKind::Organisation,
+            page.asnname.as_deref(),
+            "AS holder serving the indicator's page in a urlscan.io scan",
+            "AS holder serving a page in a urlscan.io scan involving the indicator",
+        ),
+    ]
+}
+
+/// The domains, addresses and networks the scans name, except the indicator itself. A scan of
+/// a page on the indicator names the indicator's own pages and the address and network serving
+/// them: linked pivots. A scan of another page that merely involved the indicator (loaded a
+/// resource from it, or passed through it on the way elsewhere) names that page's domain,
+/// address and network: incidental pivots, kept but never followed. The site a scan was
+/// submitted from is linked only when it is under the indicator; one that redirected into the
+/// indicator is incidental. Linked pivots are emitted first, so a value both kinds of scan name
+/// keeps the stronger reading. **Pure.**
 fn pivots(mut finding: Finding, scans: &[Scan], indicator: Indicator<'_>) -> Finding {
     let other = |value: &str| !value.eq_ignore_ascii_case(indicator.value());
-    for scan in scans {
-        if let Some(domain) = scan.task.as_ref().and_then(|t| t.domain.as_deref()) {
-            if other(domain) {
-                finding = finding.pivot(
-                    PivotKind::Domain,
-                    domain,
-                    "Submitted domain of a urlscan.io scan involving the indicator",
-                );
+    let (on, involving): (Vec<&Scan>, Vec<&Scan>) = scans.iter().partition(|scan| {
+        scan.page
+            .as_ref()
+            .is_some_and(|page| on_indicator(page, indicator))
+    });
+    // Linked: the indicator's own pages, what serves them, and the sites under it they were
+    // submitted from.
+    for scan in &on {
+        if let Some(page) = &scan.page {
+            for (kind, value, on_summary, _) in page_pivots(page) {
+                if let Some(value) = value.filter(|v| other(v)) {
+                    finding = finding.pivot(kind, value, on_summary);
+                }
             }
         }
-        let Some(page) = &scan.page else { continue };
-        if let Some(domain) = page.domain.as_deref().filter(|d| other(d)) {
+        if let Some(domain) = submitted(scan).filter(|d| other(d) && under_indicator(d, indicator))
+        {
             finding = finding.pivot(
                 PivotKind::Domain,
                 domain,
-                "Page domain in a urlscan.io scan involving the indicator",
+                "Submitted domain of a urlscan.io scan of a page on the indicator",
             );
         }
-        if let Some(ip) = page.ip.as_deref().filter(|ip| other(ip)) {
-            finding = finding.pivot(
-                PivotKind::Ip,
-                ip,
-                "Page address in a urlscan.io scan involving the indicator",
+    }
+    // Incidental: a site that led into the indicator ...
+    for scan in &on {
+        if let Some(domain) = submitted(scan).filter(|d| other(d) && !under_indicator(d, indicator))
+        {
+            finding = finding.incidental_pivot(
+                PivotKind::Domain,
+                domain,
+                "Submitted domain of a urlscan.io scan that led to a page on the indicator",
             );
         }
-        if let Some(asn) = page.asn.as_deref() {
-            finding = finding.pivot(
-                PivotKind::Asn,
-                asn,
-                "AS serving a page in a urlscan.io scan involving the indicator",
+    }
+    // ... and the pages that merely involved it.
+    for scan in &involving {
+        if let Some(domain) = submitted(scan).filter(|d| other(d)) {
+            finding = finding.incidental_pivot(
+                PivotKind::Domain,
+                domain,
+                "Submitted domain of a urlscan.io scan involving the indicator",
             );
         }
-        if let Some(name) = page.asnname.as_deref() {
-            finding = finding.pivot(
-                PivotKind::Organisation,
-                name,
-                "AS holder serving a page in a urlscan.io scan involving the indicator",
-            );
+        if let Some(page) = &scan.page {
+            for (kind, value, _, involving_summary) in page_pivots(page) {
+                if let Some(value) = value.filter(|v| other(v)) {
+                    finding = finding.incidental_pivot(kind, value, involving_summary);
+                }
+            }
         }
     }
     finding
@@ -382,6 +464,50 @@ mod tests {
             !f.pivots.iter().any(|p| p.value == "example.com"),
             "the indicator is not its own pivot"
         );
+        // The first scan's page was example.com itself: the address and network serving it are
+        // linked pivots, and the site that redirected into it is incidental. The second scan's
+        // page was another site that involved example.com: everything it names is incidental.
+        let incidental = |value: &str| {
+            f.pivots
+                .iter()
+                .find(|p| p.value == value)
+                .unwrap_or_else(|| panic!("no pivot {value}"))
+                .incidental
+        };
+        assert!(
+            incidental("glamours-designs.com"),
+            "a redirect into the indicator"
+        );
+        assert!(
+            incidental("login-example.test"),
+            "a page that merely involved it"
+        );
+        let linked: Vec<&str> = f
+            .pivots
+            .iter()
+            .filter(|p| !p.incidental)
+            .map(|p| p.value.as_str())
+            .collect();
+        assert!(
+            !linked.is_empty(),
+            "the indicator's own page names its address and network"
+        );
+        assert!(
+            linked
+                .iter()
+                .all(|value| value.starts_with("AS") || value.contains('.') || value.contains(' ')),
+            "{linked:?}"
+        );
+        for pivot in &f.pivots {
+            assert_eq!(
+                pivot.summary.contains("involving the indicator")
+                    || pivot.summary.contains("led to a page on the indicator"),
+                pivot.incidental,
+                "{}: {}",
+                pivot.value,
+                pivot.summary
+            );
+        }
     }
 
     #[test]

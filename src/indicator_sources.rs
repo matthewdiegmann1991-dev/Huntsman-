@@ -104,6 +104,10 @@ pub struct Pivot {
     pub value: String,
     /// Why the provider names it, as one evidence summary.
     pub summary: &'static str,
+    /// The provider names it beside the indicator without linking it (a page that loaded a
+    /// resource from the indicator, a site that redirected into it): kept in the report, tagged,
+    /// below the floor a recursive scan follows.
+    pub incidental: bool,
 }
 
 /// What one provider says about one indicator.
@@ -167,8 +171,30 @@ impl Finding {
     /// Name another indicator. Every one the provider names is kept; a duplicate (same kind,
     /// same value in any case) is dropped.
     #[must_use]
-    pub fn pivot(mut self, kind: PivotKind, value: impl AsRef<str>, summary: &'static str) -> Self {
-        let Some(value) = api_leg::clean(Some(value.as_ref())) else {
+    pub fn pivot(self, kind: PivotKind, value: impl AsRef<str>, summary: &'static str) -> Self {
+        self.push_pivot(kind, value.as_ref(), summary, false)
+    }
+
+    /// A pivot the provider names beside the indicator without linking it. The first reading of
+    /// a value wins, so a source emits its linked pivots before its incidental ones.
+    #[must_use]
+    pub fn incidental_pivot(
+        self,
+        kind: PivotKind,
+        value: impl AsRef<str>,
+        summary: &'static str,
+    ) -> Self {
+        self.push_pivot(kind, value.as_ref(), summary, true)
+    }
+
+    fn push_pivot(
+        mut self,
+        kind: PivotKind,
+        value: &str,
+        summary: &'static str,
+        incidental: bool,
+    ) -> Self {
+        let Some(value) = api_leg::clean(Some(value)) else {
             return self;
         };
         if self.seen.insert((kind, value.to_ascii_lowercase())) {
@@ -176,6 +202,7 @@ impl Finding {
                 kind,
                 value,
                 summary,
+                incidental,
             });
         }
         self
