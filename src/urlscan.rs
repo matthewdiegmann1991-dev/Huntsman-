@@ -10,14 +10,18 @@
 //! Everything about the listed scans is kept: each scan whole as JSON in `raw_scans`, and, across
 //! them, how many matched, the oldest and newest, every submitted and final URL, page title,
 //! status, MIME type, server, TLS issuer, country, redirect kind, apex domain, scan id, result
-//! and screenshot link, and urlscan's verdicts and highest score. Each page's domain, address,
-//! AS and AS holder, and each submitted domain, are pivots.
+//! and screenshot link, and urlscan's verdicts and highest score. A verdict judges the scanned
+//! page: one on a page on the indicator (its domain or a name under it; for an address, served
+//! from it) counts against the indicator and tags it `malicious`; one on another page that merely
+//! involved the indicator is counted and kept apart, and does not. Each page's domain, address,
+//! AS and AS holder, and each submitted domain, are pivots: linked when the scan was of a page
+//! on the indicator, incidental when the page merely involved it.
 
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::api_leg::{self, Api, Distinct, KeyPlace, KeyUse, LegError};
-use crate::canonical::{canonical_domain, canonical_ip};
+use crate::canonical::{canonical_domain, same_ip};
 use crate::domains::is_or_subdomain_of;
 use crate::http::{Transport, percent_encode_component};
 use crate::indicator_sources::{Finding, Indicator, IndicatorKind, PivotKind, Source};
@@ -159,11 +163,17 @@ pub fn lookup(
     decode(&body, indicator)
 }
 
-/// What the listed scans say, across them all. **Pure.**
+/// What the listed scans say, across them all. Verdicts are kept apart by whether the scanned
+/// page was on the indicator (`malicious`, `best_score`) or merely involved it
+/// (`involved_malicious`, `involved_best_score`). **Pure.**
 #[derive(Default)]
 struct Scans {
+    on_indicator: usize,
+    involving: usize,
     malicious: usize,
     best_score: Option<f64>,
+    involved_malicious: usize,
+    involved_best_score: Option<f64>,
     oldest: Option<String>,
     newest: Option<String>,
     urls: Distinct,
@@ -182,13 +192,28 @@ struct Scans {
 }
 
 impl Scans {
-    fn read(scans: &[Scan]) -> Self {
+    fn read(scans: &[Scan], indicator: Indicator<'_>) -> Self {
         let mut out = Self::default();
         for scan in scans {
+            let on = is_on(scan, indicator);
+            let (count, malicious, best_score) = if on {
+                (
+                    &mut out.on_indicator,
+                    &mut out.malicious,
+                    &mut out.best_score,
+                )
+            } else {
+                (
+                    &mut out.involving,
+                    &mut out.involved_malicious,
+                    &mut out.involved_best_score,
+                )
+            };
+            *count += 1;
             if let Some(overall) = scan.verdicts.as_ref().and_then(|v| v.overall.as_ref()) {
-                out.malicious += usize::from(overall.malicious);
+                *malicious += usize::from(overall.malicious);
                 if let Some(score) = overall.score {
-                    out.best_score = Some(out.best_score.map_or(score, |best| best.max(score)));
+                    *best_score = Some(best_score.map_or(score, |best| best.max(score)));
                 }
             }
             if let Some(task) = &scan.task {
@@ -222,8 +247,18 @@ impl Scans {
 
     fn into_finding(self, finding: Finding) -> Finding {
         finding
+            .attr("scans_on_indicator", self.on_indicator.to_string())
+            .attr("scans_involving", self.involving.to_string())
             .attr("malicious_scans", self.malicious.to_string())
             .opt_attr("max_verdict_score", self.best_score.map(|s| s.to_string()))
+            .attr(
+                "involved_malicious_scans",
+                self.involved_malicious.to_string(),
+            )
+            .opt_attr(
+                "max_involved_verdict_score",
+                self.involved_best_score.map(|s| s.to_string()),
+            )
             .opt_attr("oldest_scan", self.oldest)
             .opt_attr("newest_scan", self.newest)
             .list_attr("urls", self.urls.values())
@@ -252,9 +287,16 @@ fn on_indicator(page: &Page, indicator: Indicator<'_>) -> bool {
             .as_deref()
             .and_then(canonical_domain)
             .is_some_and(|name| is_or_subdomain_of(&name, domain)),
-        Indicator::Ip(ip) => page.ip.as_deref().and_then(canonical_ip) == canonical_ip(ip),
+        Indicator::Ip(ip) => page.ip.as_deref().is_some_and(|served| same_ip(served, ip)),
         _ => false,
     }
+}
+
+/// Whether a scan's final page was on the indicator. **Pure.**
+fn is_on(scan: &Scan, indicator: Indicator<'_>) -> bool {
+    scan.page
+        .as_ref()
+        .is_some_and(|page| on_indicator(page, indicator))
 }
 
 /// Whether a submitted domain is the indicator or a name under it. **Pure.**
@@ -314,11 +356,8 @@ fn page_pivots(page: &Page) -> [(PivotKind, Option<&str>, &'static str, &'static
 /// keeps the stronger reading. **Pure.**
 fn pivots(mut finding: Finding, scans: &[Scan], indicator: Indicator<'_>) -> Finding {
     let other = |value: &str| !value.eq_ignore_ascii_case(indicator.value());
-    let (on, involving): (Vec<&Scan>, Vec<&Scan>) = scans.iter().partition(|scan| {
-        scan.page
-            .as_ref()
-            .is_some_and(|page| on_indicator(page, indicator))
-    });
+    let (on, involving): (Vec<&Scan>, Vec<&Scan>) =
+        scans.iter().partition(|scan| is_on(scan, indicator));
     // Linked: the indicator's own pages, what serves them, and the sites under it they were
     // submitted from.
     for scan in &on {
@@ -386,10 +425,12 @@ pub fn decode(body: &[u8], indicator: Indicator<'_>) -> Result<Option<Finding>, 
         .map_err(|e| LegError::Decode(format!("unexpected scan shape: {e}")))?;
     let listed = scans.len() as u64;
     let total = body.total.unwrap_or(listed).max(listed);
-    let read = Scans::read(&scans);
+    let read = Scans::read(&scans, indicator);
     let mut finding = Finding::new(format!(
-        "urlscan.io: {total} public scan(s), {} of the newest {listed} judged malicious",
-        read.malicious
+        "urlscan.io: {total} public scan(s); of the newest {listed}, {} of pages on the \
+         indicator ({} judged malicious) and {} of other pages that involved it ({} judged \
+         malicious)",
+        read.on_indicator, read.malicious, read.involving, read.involved_malicious
     ))
     .attr("scan_count", total.to_string())
     .attr("scans_listed", listed.to_string())
@@ -424,13 +465,17 @@ mod tests {
             .unwrap_or_else(|| panic!("recorded body must decode"));
         assert_eq!(
             f.summary,
-            "urlscan.io: 5906 public scan(s), 1 of the newest 2 judged malicious"
+            "urlscan.io: 5906 public scan(s); of the newest 2, 1 of pages on the indicator (0 \
+             judged malicious) and 1 of other pages that involved it (1 judged malicious)"
         );
         for (key, expected) in [
             ("scan_count", "5906"),
             ("scans_listed", "2"),
-            ("malicious_scans", "1"),
-            ("max_verdict_score", "100"),
+            ("scans_on_indicator", "1"),
+            ("scans_involving", "1"),
+            ("malicious_scans", "0"),
+            ("involved_malicious_scans", "1"),
+            ("max_involved_verdict_score", "100"),
             ("oldest_scan", "2026-10-13T01:00:00.000Z"),
             ("newest_scan", "2026-10-14T15:05:47.894Z"),
             (
@@ -452,7 +497,11 @@ mod tests {
         ] {
             assert_eq!(value(&f, key), Some(expected), "{key}: {:?}", f.attrs);
         }
-        assert!(f.tags.contains(&tags::MALICIOUS) && f.tags.contains(&"truncated"));
+        // The one malicious verdict was on login-example.test's page, which merely involved
+        // example.com: it is counted apart and does not make example.com malicious.
+        assert_eq!(value(&f, "max_verdict_score"), None, "{:?}", f.attrs);
+        assert!(!f.tags.contains(&tags::MALICIOUS), "{:?}", f.tags);
+        assert!(f.tags.contains(&"truncated"), "{:?}", f.tags);
         let domains: Vec<&str> = f
             .pivots
             .iter()
@@ -577,5 +626,48 @@ mod tests {
             url(Indicator::Ip("2001:db8::1")).as_deref(),
             Some("https://urlscan.io/api/v1/search/?q=ip%3A%222001%3Adb8%3A%3A1%22&size=100")
         );
+    }
+
+    #[test]
+    fn a_malicious_verdict_on_the_indicators_own_page_marks_it_and_an_address_is_matched_by_ip() {
+        // A phishing page under example.com, judged malicious; a benign page on the apex.
+        let body = r#"{"results":[{"page":{"domain":"phish.example.com","ip":"203.0.113.10","asn":"AS64500","asnname":"EXAMPLE-AS"},"verdicts":{"overall":{"malicious":true,"score":90}}},{"page":{"domain":"www.example.com","ip":"203.0.113.11"},"verdicts":{"overall":{"malicious":false,"score":0}}}],"total":2}"#;
+        let f = decode(body.as_bytes(), Indicator::Domain("example.com"))
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| panic!("scans on the indicator must decode"));
+        assert_eq!(
+            f.summary,
+            "urlscan.io: 2 public scan(s); of the newest 2, 2 of pages on the indicator (1 \
+             judged malicious) and 0 of other pages that involved it (0 judged malicious)"
+        );
+        assert_eq!(value(&f, "malicious_scans"), Some("1"));
+        assert_eq!(value(&f, "max_verdict_score"), Some("90"));
+        assert_eq!(value(&f, "involved_malicious_scans"), Some("0"));
+        assert_eq!(value(&f, "max_involved_verdict_score"), None);
+        assert!(f.tags.contains(&tags::MALICIOUS), "{:?}", f.tags);
+        // Both pages are on the indicator: everything they name is linked.
+        assert!(f.pivots.iter().all(|p| !p.incidental), "{:?}", f.pivots);
+        assert!(f.pivots.iter().any(|p| p.value == "phish.example.com"));
+
+        // For an address, a page is on the indicator when it was served from it, however the
+        // address is written; a page served from elsewhere merely involved it.
+        let body = r#"{"results":[{"page":{"domain":"a.example","ip":"2001:DB8::1"},"verdicts":{"overall":{"malicious":true,"score":100}}},{"page":{"domain":"b.example","ip":"2001:db8::2"},"verdicts":{"overall":{"malicious":true,"score":100}}}],"total":2}"#;
+        let f = decode(body.as_bytes(), Indicator::Ip("2001:db8:0::1"))
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| panic!("scans for an address must decode"));
+        assert_eq!(value(&f, "scans_on_indicator"), Some("1"));
+        assert_eq!(value(&f, "malicious_scans"), Some("1"));
+        assert_eq!(value(&f, "involved_malicious_scans"), Some("1"));
+        assert!(f.tags.contains(&tags::MALICIOUS));
+        let incidental = |value: &str| {
+            f.pivots
+                .iter()
+                .find(|p| p.value == value)
+                .unwrap_or_else(|| panic!("no pivot {value}"))
+                .incidental
+        };
+        assert!(!incidental("a.example") && incidental("b.example"));
     }
 }
