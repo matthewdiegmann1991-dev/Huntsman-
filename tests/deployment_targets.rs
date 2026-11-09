@@ -221,18 +221,29 @@ fn container_dependencies_compile_in_a_layer_a_new_commit_keeps() {
             .unwrap_or_else(|| panic!("the builder stage must contain {needle:?}"))
     };
     let manifests = position("COPY Cargo.toml Cargo.lock ./");
-    let dependencies = position("cargo build --release --locked --bin huntsman-recon \\\n    && rm -rf src xtask/src");
+    let dependencies = position(
+        "cargo build --release --locked --bin huntsman-recon \\\n    && rm -rf src xtask/src",
+    );
     let sources = position("COPY src ./src");
     let build_argument = position("ARG HUNTSMAN_BUILD_SHA=unknown");
     let source_argument = position("ARG HUNTSMAN_SOURCE_SHA");
     let final_build = position("cargo clean --release --package huntsman-recon");
-    assert!(manifests < dependencies, "the manifests come before the dependency build");
-    assert!(dependencies < sources, "the dependency build comes before the sources");
+    assert!(
+        manifests < dependencies,
+        "the manifests come before the dependency build"
+    );
+    assert!(
+        dependencies < sources,
+        "the dependency build comes before the sources"
+    );
     assert!(
         dependencies < build_argument && dependencies < source_argument,
         "a per-commit build argument declared before the dependency build invalidates it"
     );
-    assert!(sources < final_build, "the crate is rebuilt from its real sources last");
+    assert!(
+        sources < final_build,
+        "the crate is rebuilt from its real sources last"
+    );
     assert_eq!(
         builder.matches("COPY src ").count(),
         1,
