@@ -31,8 +31,15 @@ pub const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-2
 /// longer line is refused, its remainder discarded, without being held in memory.
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
-/// The longest selector, name or query accepted, the bound `serve`'s JSON API applies.
+/// The longest selector, name, query or seed accepted, the bound `serve`'s JSON API applies.
 pub const MAX_ARGUMENT_BYTES: usize = 512;
+
+/// The most seeds one offline analysis takes, as `/api/analyze` takes them.
+pub const MAX_ANALYZE_SEEDS: usize = 16;
+
+/// The longest text `investigate` reads from a call: far more than a model pastes, well within
+/// the message bound, and a quarter of what the command reads from a file in Termux.
+pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 
 /// The serialized size of the entities a summary lookup shows: about twelve thousand tokens, room
 /// for a model to reason over while the full report (megabytes for a busy IP address) stays one
@@ -75,6 +82,19 @@ pub trait Tools {
     /// # Errors
     /// The search's refusal or failure, in words.
     fn research(&self, query: &str) -> Result<Value, ToolError>;
+
+    /// The actionable entities in a text, offline: no request, no key.
+    ///
+    /// # Errors
+    /// A text the classifier cannot read, in words.
+    fn investigate(&self, text: &str) -> Result<Value, ToolError>;
+
+    /// The offline multi-hop analysis of up to [`MAX_ANALYZE_SEEDS`] seeds: the links derived
+    /// between them, the next pivots, correlations, gaps and the sources the planner would ask.
+    ///
+    /// # Errors
+    /// Seeds the spine refuses, in words.
+    fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError>;
 }
 
 /// One server: the tools it runs and the identity it reports.
@@ -240,9 +260,12 @@ impl<'a, T: Tools + ?Sized> Server<'a, T> {
             }),
             "people_discover" => discover_arguments(arguments)
                 .and_then(|(name, region)| self.tools.people_discover(&name, region)),
-            "research" => {
-                text_argument(arguments, "query").and_then(|query| self.tools.research(&query))
-            }
+            "research" => text_argument(arguments, "query", MAX_ARGUMENT_BYTES)
+                .and_then(|query| self.tools.research(&query)),
+            "investigate" => refuse_unknown(arguments, &["text"])
+                .and_then(|()| text_argument(arguments, "text", MAX_TEXT_BYTES))
+                .and_then(|text| self.tools.investigate(&text)),
+            "analyze" => analyze_arguments(arguments).and_then(|seeds| self.tools.analyze(&seeds)),
             other => return Err(format!("no tool named {other}")),
         };
         Ok(match outcome {
@@ -259,7 +282,9 @@ const INSTRUCTIONS: &str = "Huntsman OSINT Engine: live, source-attributed open-
 intelligence lookups. Every result carries its sources' typed outcomes (success, valid_zero, \
 blocked, not_configured, upstream errors) beside the entities found. A source that did not \
 answer is not evidence of absence, and a name match, an indexed page or several engines \
-returning one URL does not prove identity. Report candidates as candidates.";
+returning one URL does not prove identity. Report candidates as candidates. investigate and \
+analyze are offline (no request, no key): extract selectors from a text with investigate, \
+look the interesting ones up, then analyze the set for the links between them.";
 
 /// A successful tool result: the report as structured content, and as JSON text for clients
 /// that read only text content.
@@ -285,114 +310,202 @@ pub fn lookup_kinds() -> Vec<&'static str> {
         .collect()
 }
 
+/// Behaviour hints for a tool that reads public sources: it changes nothing on this device or
+/// elsewhere, and asks the open world, so it may answer differently each time.
+fn live_hints(title: &str) -> Value {
+    json!({
+        "title": title,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+    })
+}
+
+/// Behaviour hints for a tool that reads only its arguments: the same call gives the same answer.
+fn offline_hints(title: &str) -> Value {
+    json!({
+        "title": title,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+    })
+}
+
 /// The `tools/list` definitions: name, title, description, input schema and behaviour hints.
 #[must_use]
 pub fn tool_definitions() -> Vec<Value> {
-    // Each tool reads public sources and changes nothing on this device or elsewhere.
-    let hints = |title: &str| {
-        json!({
-            "title": title,
-            "readOnlyHint": true,
-            "destructiveHint": false,
-            "idempotentHint": false,
-            "openWorldHint": true,
-        })
-    };
     vec![
-        json!({
-            "name": "lookup",
-            "title": "OSINT lookup",
-            "description": "Run one live OSINT lookup through every source for its kind and \
-        return the entities found with each source's typed outcome. Kinds: auto (infer from the \
-        selector), people (full name: registers, sanctions, offshore leaks), email, exposure (breach \
-        evidence for an email or handle), username, phone, domain (certificate transparency, DNS, \
-        threat feeds), ip, netblock (CIDR), asn, network (BSSID, ssid:NAME or LAT,LON), crypto \
-        (bitcoin, eth:0x…, base:0x…, sol:…), geocode (place or LAT,LON), and the public news, \
-        notices, web and dossier searches. Keyed sources run only when their key is configured.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "kind": {
-                        "type": "string",
-                        "enum": lookup_kinds(),
-                        "default": "auto",
-                        "description": "What the selector is; auto infers it.",
-                    },
-                    "selector": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAX_ARGUMENT_BYTES,
-                        "description": "The value to look up, such as an email address, \
-        domain, IP address, handle, phone number or full name.",
-                    },
-                    "detail": {
-                        "type": "string",
-                        "enum": ["summary", "full"],
-                        "default": "summary",
-                        "description": "summary: every source outcome, entity counts by kind \
-        and the most confident entities with their evidence, sized for a model to read. full: the \
-        complete report, which can be megabytes.",
-                    },
-                },
-                "required": ["selector"],
-                "additionalProperties": false,
-            },
-            "annotations": hints("OSINT lookup"),
-        }),
-        json!({
-            "name": "people_discover",
-            "title": "People discovery",
-            "description": "Search public indexes for leads on one person by full name: \
-        LinkedIn, GitHub, ORCID and the region's official register (ASIC for au, SEC for us, DFSA for \
-        ae), plus Open Library authors. Results whose title and address never name the person are \
-        dropped. Every result is an unverified lead, not an identification.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAX_ARGUMENT_BYTES,
-                        "description": "The person's full name, at least two words.",
-                    },
-                    "region": {
-                        "type": "string",
-                        "enum": ["au", "us", "ae"],
-                        "default": "au",
-                        "description": "Which official register to search.",
-                    },
-                },
-                "required": ["name"],
-                "additionalProperties": false,
-            },
-            "annotations": hints("People discovery"),
-        }),
-        json!({
-            "name": "research",
-            "title": "Web research",
-            "description": "Keyless adaptive web search for any text: up to three \
-        feedback-directed rounds across Bing, Brave and Mojeek, with every URL attributed to the \
-        engines that returned it and each engine's typed outcome.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAX_ARGUMENT_BYTES,
-                        "description": "What to search for.",
-                    },
-                },
-                "required": ["query"],
-                "additionalProperties": false,
-            },
-            "annotations": hints("Web research"),
-        }),
+        lookup_tool(),
+        people_discover_tool(),
+        research_tool(),
+        investigate_tool(),
+        analyze_tool(),
     ]
 }
 
-/// A required string argument, trimmed, nonempty and within [`MAX_ARGUMENT_BYTES`].
-fn text_argument(arguments: &Map<String, Value>, key: &str) -> Result<String, ToolError> {
+/// The `lookup` tool.
+fn lookup_tool() -> Value {
+    json!({
+        "name": "lookup",
+        "title": "OSINT lookup",
+        "description": "Run one live OSINT lookup through every source for its kind and \
+    return the entities found with each source's typed outcome. Kinds: auto (infer from the \
+    selector), people (full name: registers, sanctions, offshore leaks), email, exposure (breach \
+    evidence for an email or handle), username, phone, domain (certificate transparency, DNS, \
+    threat feeds), ip, netblock (CIDR), asn, network (BSSID, ssid:NAME or LAT,LON), crypto \
+    (bitcoin, eth:0x…, base:0x…, sol:…), geocode (place or LAT,LON), and the public news, \
+    notices, web and dossier searches. Keyed sources run only when their key is configured.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": lookup_kinds(),
+                    "default": "auto",
+                    "description": "What the selector is; auto infers it.",
+                },
+                "selector": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "The value to look up, such as an email address, \
+    domain, IP address, handle, phone number or full name.",
+                },
+                "detail": {
+                    "type": "string",
+                    "enum": ["summary", "full"],
+                    "default": "summary",
+                    "description": "summary: every source outcome, entity counts by kind \
+    and the most confident entities with their evidence, sized for a model to read. full: the \
+    complete report, which can be megabytes.",
+                },
+            },
+            "required": ["selector"],
+            "additionalProperties": false,
+        },
+        "annotations": live_hints("OSINT lookup"),
+    })
+}
+
+/// The `people_discover` tool.
+fn people_discover_tool() -> Value {
+    json!({
+        "name": "people_discover",
+        "title": "People discovery",
+        "description": "Search public indexes for leads on one person by full name: \
+    LinkedIn, GitHub, ORCID and the region's official register (ASIC for au, SEC for us, DFSA for \
+    ae), plus Open Library authors. Results whose title and address never name the person are \
+    dropped. Every result is an unverified lead, not an identification.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "The person's full name, at least two words.",
+                },
+                "region": {
+                    "type": "string",
+                    "enum": ["au", "us", "ae"],
+                    "default": "au",
+                    "description": "Which official register to search.",
+                },
+            },
+            "required": ["name"],
+            "additionalProperties": false,
+        },
+        "annotations": live_hints("People discovery"),
+    })
+}
+
+/// The `research` tool.
+fn research_tool() -> Value {
+    json!({
+        "name": "research",
+        "title": "Web research",
+        "description": "Keyless adaptive web search for any text: up to three \
+    feedback-directed rounds across Bing, Brave and Mojeek, with every URL attributed to the \
+    engines that returned it and each engine's typed outcome.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "What to search for.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": false,
+        },
+        "annotations": live_hints("Web research"),
+    })
+}
+
+/// The `investigate` tool.
+fn investigate_tool() -> Value {
+    json!({
+        "name": "investigate",
+        "title": "Extract selectors from text",
+        "description": "Offline: no request, no key. Extract every email address, phone \
+    number, handle, domain, URL, IP address, coordinates and company number from a text (an advert, \
+    a message thread, a page) as entities, each with the classifier's signal as its evidence. Use it \
+    to turn pasted material into selectors for lookup.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_TEXT_BYTES,
+                    "description": "The text to read.",
+                },
+            },
+            "required": ["text"],
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("Extract selectors from text"),
+    })
+}
+
+/// The `analyze` tool.
+fn analyze_tool() -> Value {
+    json!({
+        "name": "analyze",
+        "title": "Offline analysis of seeds",
+        "description": "Offline: no request, no key. The multi-hop analysis of up to 16 \
+    seeds (emails, domains, handles, phones, addresses): the links derived between them, the next \
+    pivots ranked by how much of the graph each holds together, the correlations over those links, \
+    the seeds left unlinked with what would expand them, and the sources a live lookup would ask \
+    next. A link rests on the seeds given; it stays a hypothesis until a source corroborates it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "seeds": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1, "maxLength": MAX_ARGUMENT_BYTES },
+                    "minItems": 1,
+                    "maxItems": MAX_ANALYZE_SEEDS,
+                    "description": "The selectors to analyse together.",
+                },
+            },
+            "required": ["seeds"],
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("Offline analysis of seeds"),
+    })
+}
+
+/// A required string argument, trimmed, nonempty and within `max` bytes.
+fn text_argument(
+    arguments: &Map<String, Value>,
+    key: &str,
+    max: usize,
+) -> Result<String, ToolError> {
     let value = match arguments.get(key) {
         Some(Value::String(value)) => value.trim(),
         Some(_) => return Err(format!("{key} must be a string")),
@@ -401,10 +514,46 @@ fn text_argument(arguments: &Map<String, Value>, key: &str) -> Result<String, To
     if value.is_empty() {
         return Err(format!("{key} must not be empty"));
     }
-    if value.len() > MAX_ARGUMENT_BYTES {
-        return Err(format!("{key} is longer than {MAX_ARGUMENT_BYTES} bytes"));
+    if value.len() > max {
+        return Err(format!("{key} is longer than {max} bytes"));
     }
     Ok(value.to_owned())
+}
+
+/// The `seeds` of an analysis: one to [`MAX_ANALYZE_SEEDS`] strings, each trimmed, nonempty and
+/// within [`MAX_ARGUMENT_BYTES`].
+fn analyze_arguments(arguments: &Map<String, Value>) -> Result<Vec<String>, ToolError> {
+    refuse_unknown(arguments, &["seeds"])?;
+    let seeds = match arguments.get("seeds") {
+        Some(Value::Array(seeds)) => seeds,
+        Some(_) => return Err("seeds must be an array of strings".into()),
+        None => return Err("seeds is required".into()),
+    };
+    if seeds.is_empty() {
+        return Err("seeds must hold at least one seed".into());
+    }
+    if seeds.len() > MAX_ANALYZE_SEEDS {
+        return Err(format!("analysis takes at most {MAX_ANALYZE_SEEDS} seeds"));
+    }
+    seeds
+        .iter()
+        .enumerate()
+        .map(|(index, seed)| {
+            let seed = seed
+                .as_str()
+                .ok_or_else(|| format!("seed {index} is not a string"))?
+                .trim();
+            if seed.is_empty() {
+                return Err(format!("seed {index} is empty"));
+            }
+            if seed.len() > MAX_ARGUMENT_BYTES {
+                return Err(format!(
+                    "seed {index} is longer than {MAX_ARGUMENT_BYTES} bytes"
+                ));
+            }
+            Ok(seed.to_owned())
+        })
+        .collect()
 }
 
 /// An optional string argument, lower-cased, or `default` when absent.
@@ -433,7 +582,7 @@ fn refuse_unknown(arguments: &Map<String, Value>, known: &[&str]) -> Result<(), 
 /// The lookup's kind, selector, and whether the full report was asked for.
 fn lookup_arguments(arguments: &Map<String, Value>) -> Result<(String, String, bool), ToolError> {
     refuse_unknown(arguments, &["kind", "selector", "detail"])?;
-    let selector = text_argument(arguments, "selector")?;
+    let selector = text_argument(arguments, "selector", MAX_ARGUMENT_BYTES)?;
     let kind = choice_argument(arguments, "kind", "auto")?;
     if !lookup_kinds().contains(&kind.as_str()) {
         return Err(format!(
@@ -585,7 +734,7 @@ fn bounded(value: &Value) -> Value {
 
 fn discover_arguments(arguments: &Map<String, Value>) -> Result<(String, Region), ToolError> {
     refuse_unknown(arguments, &["name", "region"])?;
-    let name = text_argument(arguments, "name")?;
+    let name = text_argument(arguments, "name", MAX_ARGUMENT_BYTES)?;
     let region = choice_argument(arguments, "region", "au")?;
     let region = Region::parse(&region)
         .ok_or_else(|| format!("unknown region {region}; expected au, us or ae"))?;
@@ -657,6 +806,18 @@ mod tests {
         fn research(&self, query: &str) -> Result<Value, ToolError> {
             self.calls.borrow_mut().push(format!("research {query}"));
             Ok(json!({ "route": "adaptive_web_search" }))
+        }
+
+        fn investigate(&self, text: &str) -> Result<Value, ToolError> {
+            self.calls.borrow_mut().push(format!("investigate {text}"));
+            Ok(json!({ "route": "investigate", "entities": [] }))
+        }
+
+        fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("analyze {}", seeds.join(",")));
+            Ok(json!({ "accepted": seeds, "entities": [] }))
         }
     }
 
@@ -764,12 +925,34 @@ mod tests {
         let reply = answer(&tools, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
         let listed = reply["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = listed.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["lookup", "people_discover", "research"]);
+        assert_eq!(
+            names,
+            [
+                "lookup",
+                "people_discover",
+                "research",
+                "investigate",
+                "analyze"
+            ]
+        );
         for tool in listed {
             assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
             assert_eq!(tool["inputSchema"]["additionalProperties"], false, "{tool}");
             assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
+            assert_eq!(tool["annotations"]["destructiveHint"], false, "{tool}");
             assert!(tool["description"].as_str().unwrap().len() > 40, "{tool}");
+            // The offline tools say so: a model may call them freely and expect the same answer.
+            let offline = matches!(tool["name"].as_str(), Some("investigate" | "analyze"));
+            assert_eq!(tool["annotations"]["openWorldHint"], !offline, "{tool}");
+            assert_eq!(tool["annotations"]["idempotentHint"], offline, "{tool}");
+            assert_eq!(
+                tool["description"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Offline: no request, no key."),
+                offline,
+                "{tool}"
+            );
         }
         // The schema's kinds are exactly the typed routes, `auto`, and the public searches.
         let kinds = &listed[0]["inputSchema"]["properties"]["kind"]["enum"];
@@ -805,6 +988,16 @@ mod tests {
         );
         call(&tools, "people_discover", &json!({"name":"Clara Ashwell"}));
         call(&tools, "research", &json!({"query":"rust termux"}));
+        call(
+            &tools,
+            "investigate",
+            &json!({"text":"  mail a@example.com  "}),
+        );
+        call(
+            &tools,
+            "analyze",
+            &json!({"seeds":[" a@example.com ", "example.com"]}),
+        );
         assert_eq!(
             *tools.calls.borrow(),
             [
@@ -813,6 +1006,8 @@ mod tests {
                 "discover Clara Ashwell Us",
                 "discover Clara Ashwell Au",
                 "research rust termux",
+                "investigate mail a@example.com",
+                "analyze a@example.com,example.com",
             ]
         );
     }
@@ -832,6 +1027,23 @@ mod tests {
             ),
             ("people_discover", json!({"name":"A B","region":"uk"})),
             ("research", json!({"q":"x"})),
+            ("investigate", json!({})),
+            ("investigate", json!({"text":"   "})),
+            ("investigate", json!({"text":"x","extra":1})),
+            (
+                "investigate",
+                json!({"text":"x".repeat(MAX_TEXT_BYTES + 1)}),
+            ),
+            ("analyze", json!({})),
+            ("analyze", json!({"seeds":"a@example.com"})),
+            ("analyze", json!({"seeds":[]})),
+            ("analyze", json!({"seeds":["a@example.com", 7]})),
+            ("analyze", json!({"seeds":["a@example.com", "  "]})),
+            (
+                "analyze",
+                json!({"seeds": vec!["x"; MAX_ANALYZE_SEEDS + 1]}),
+            ),
+            ("analyze", json!({"seeds":["x"], "depth": 2})),
         ] {
             let reply = call(&tools, name, &arguments);
             assert_eq!(reply["result"]["isError"], true, "{arguments}");
@@ -941,6 +1153,12 @@ mod tests {
                 unreachable!()
             }
             fn research(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn investigate(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn analyze(&self, _: &[String]) -> Result<Value, ToolError> {
                 unreachable!()
             }
         }

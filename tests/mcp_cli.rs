@@ -61,11 +61,27 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
         json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
             "name":"people_discover","arguments":{"name":"Cher"}}}),
         json!({"jsonrpc":"2.0","id":5,"method":"ping"}),
+        // Offline: the classifier and the investigation spine make no request.
+        json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{
+            "name":"investigate","arguments":{"text":"Contact alice@example.com, site https://example.com/x"}}}),
+        json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+            "name":"analyze","arguments":{"seeds":["alice@example.com","example.com"]}}}),
     ]);
     assert_eq!(code, Some(0), "{stderr}");
     assert!(stderr.is_empty(), "{stderr}");
     let ids: Vec<&Value> = answers.iter().map(|a| &a["id"]).collect();
-    assert_eq!(ids, [&json!(1), &json!(2), &json!(3), &json!(4), &json!(5)]);
+    assert_eq!(
+        ids,
+        [
+            &json!(1),
+            &json!(2),
+            &json!(3),
+            &json!(4),
+            &json!(5),
+            &json!(6),
+            &json!(7)
+        ]
+    );
 
     assert_eq!(answers[0]["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(answers[0]["result"]["serverInfo"]["name"], "huntsman-recon");
@@ -79,7 +95,16 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(tools, ["lookup", "people_discover", "research"]);
+    assert_eq!(
+        tools,
+        [
+            "lookup",
+            "people_discover",
+            "research",
+            "investigate",
+            "analyze"
+        ]
+    );
 
     // The adapter's refusal reaches the model as a readable tool error, not a protocol error.
     assert_eq!(answers[2]["result"]["isError"], true);
@@ -92,6 +117,43 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
     let refusal = answers[3]["result"]["content"][0]["text"].as_str().unwrap();
     assert!(refusal.contains("two alphabetic tokens"), "{refusal}");
     assert_eq!(answers[4]["result"], json!({}));
+
+    // investigate found the address and the link in the text, with no source outcomes.
+    let investigated = &answers[5]["result"];
+    assert_eq!(investigated["isError"], false, "{investigated}");
+    let report = &investigated["structuredContent"];
+    assert_eq!(report["route"], "investigate");
+    let values: Vec<&str> = report["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entity| entity["value"].as_str())
+        .collect();
+    assert!(values.contains(&"alice@example.com"), "{values:?}");
+    assert!(values.contains(&"https://example.com/x"), "{values:?}");
+    assert_eq!(report["outcomes"], json!([]));
+
+    // analyze accepted both seeds and derived the link between them.
+    let analyzed = &answers[6]["result"];
+    assert_eq!(analyzed["isError"], false, "{analyzed}");
+    let report = &analyzed["structuredContent"];
+    let accepted: Vec<&str> = report["accepted"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|seed| seed["value"].as_str())
+        .collect();
+    assert_eq!(accepted, ["alice@example.com", "example.com"], "{report}");
+    assert!(
+        report["entities"].as_array().is_some_and(|e| e.len() >= 2),
+        "{report}"
+    );
+    assert!(
+        report["relations"]
+            .as_array()
+            .is_some_and(|r| !r.is_empty()),
+        "{report}"
+    );
 }
 
 #[test]

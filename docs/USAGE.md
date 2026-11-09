@@ -620,13 +620,15 @@ On Termux (Android, aarch64, no root) the default bind `127.0.0.1:8080` needs no
 
 ### Use from LLM applications (MCP)
 
-`huntsman-recon mcp` runs the binary as a [Model Context Protocol](https://modelcontextprotocol.io) server over standard input and output, so Claude Desktop, Claude Code, Cursor and any other MCP client can call Huntsman as a tool. It speaks protocol revisions 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05, one JSON-RPC message per line, and writes nothing else to standard output. It opens no port and makes no network request until a tool is called.
+`huntsman-recon mcp` runs the binary as a [Model Context Protocol](https://modelcontextprotocol.io) server over standard input and output, so Claude Desktop, Claude Code, Cursor and any other MCP client can call Huntsman as a tool. It speaks protocol revisions 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05, one JSON-RPC message per line, and writes nothing else to standard output. It opens no port and makes no network request until a tool is called. The two offline tools are marked so (`openWorldHint: false`, `idempotentHint: true`), so a client can call them freely; an agent's natural loop is `investigate` a pasted text, `lookup` the selectors worth following, then `analyze` the set for the links between them.
 
 | Tool | Arguments | Runs |
 |---|---|---|
 | `lookup` | `selector`; `kind` (`auto`, `people`, `email`, `exposure`, `username`, `phone`, `domain`, `ip`, `netblock`, `asn`, `network`, `crypto`, `geocode`, `news`, `notices`, `web`, `dossier`); `detail` (`summary` or `full`) | the same lookup as `GET /api/lookup` |
 | `people_discover` | `name`; `region` (`au`, `us`, `ae`) | the same discovery as `POST /api/people/discover` |
 | `research` | `query` | the same adaptive search as `query --adaptive` |
+| `investigate` | `text` | the same offline selector extraction as `POST /api/investigate` and `investigate TEXT...`: no request, no key |
+| `analyze` | `seeds` (1 to 16) | the same offline multi-hop analysis as `GET /api/analyze` and `plan`: no request, no key |
 
 Each tool runs exactly as the JSON API runs it: the same keys from the environment and `~/.huntsman.env`, the same public-only egress, the same source outcomes. A lookup answers with a `summary` by default: every source outcome, how many entities of each kind were found, and the most confident entities with up to six evidence records each, within about 48 KiB, with every cut counted. A busy IP address or domain finds thousands of entities, megabytes that no model can read at once. `detail: "full"` returns the report whole, as `/api/lookup` does. A refused selector or a failed lookup comes back as a tool error the model can read and correct.
 
