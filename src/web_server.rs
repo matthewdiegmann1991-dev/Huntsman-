@@ -212,6 +212,15 @@ pub type PeopleDiscoverHandler = Arc<
         + Sync,
 >;
 
+/// A finished lookup as JSON, in the shape `GET /api/lookup` answers it: the report with the
+/// synergy leads derived from its entities. The MCP `lookup` tool returns the same shape.
+///
+/// # Errors
+/// A report that cannot be encoded.
+pub fn lookup_json(report: &LookupReport) -> Result<serde_json::Value, serde_json::Error> {
+    lookup::lookup_value(report)
+}
+
 /// Runs one lookup. Installed by the binary, which owns transport construction.
 pub type LookupHandler =
     Arc<dyn Fn(&LookupQuery) -> Result<LookupReport, LookupError> + Send + Sync>;

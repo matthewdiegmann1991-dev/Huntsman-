@@ -194,6 +194,12 @@ fn search_parameter(engine: &str) -> &'static str {
 pub struct SearchHit {
     pub engine: String,
     pub url: String,
+    /// The visible text of the result's anchors on the engine page (its title, as a rule),
+    /// tags removed, entities decoded, whitespace collapsed and bounded. Empty when the engine
+    /// gave the link no text. It is the engine's description of the page, not the page itself,
+    /// so it is kept out of serialised reports.
+    #[serde(skip)]
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -796,7 +802,7 @@ pub fn parse_hits(html: &str, engine: &str) -> Vec<SearchHit> {
     // Set membership deduplicates while the vector preserves provider ranking.
     let mut seen = BTreeSet::new();
     let mut hits = Vec::new();
-    for href in href_values(html) {
+    for (href, text) in anchors(html) {
         let Some(url) = extract_result_url(href, engine) else {
             continue;
         };
@@ -804,12 +810,19 @@ pub fn parse_hits(html: &str, engine: &str) -> Vec<SearchHit> {
             continue;
         }
         if seen.insert(url.clone()) {
+            if hits.len() >= MAX_RESULTS_PER_ENGINE {
+                break;
+            }
             hits.push(SearchHit {
                 engine: engine.into(),
                 url,
+                text,
             });
-            if hits.len() >= MAX_RESULTS_PER_ENGINE {
-                break;
+        } else if !text.is_empty() {
+            // An engine often links one result twice (a thumbnail, then the title): the text
+            // of every anchor to that result describes it.
+            if let Some(hit) = hits.iter_mut().find(|hit| hit.url == url) {
+                append_anchor_text(&mut hit.text, &text);
             }
         }
     }
@@ -878,7 +891,76 @@ fn wrapped_parameter<'a>(url: &'a str, keys: &[&str]) -> Option<&'a str> {
         .map(|(_, value)| value)
 }
 
-fn href_values(html: &str) -> Vec<&str> {
+/// The most anchor text one result keeps: a title and a little more, never a page.
+const MAX_ANCHOR_TEXT_BYTES: usize = 512;
+
+fn append_anchor_text(into: &mut String, text: &str) {
+    if into.contains(text) {
+        return;
+    }
+    if !into.is_empty() {
+        into.push(' ');
+    }
+    into.push_str(text);
+    truncate_on_char_boundary(into, MAX_ANCHOR_TEXT_BYTES);
+}
+
+fn truncate_on_char_boundary(text: &mut String, max: usize) {
+    if text.len() > max {
+        let mut cut = max;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
+    }
+}
+
+/// The visible text of an anchor whose start tag ends at `start`: everything up to its
+/// `</a`, with nested tags removed, entities decoded and whitespace collapsed.
+fn anchor_text(html: &str, start: usize) -> String {
+    // Read a bounded window only, so a page of many anchors stays linear: a title is short.
+    let rest = html.as_bytes().get(start..).unwrap_or_default();
+    let bounded = &rest[..rest.len().min(4 * MAX_ANCHOR_TEXT_BYTES)];
+    let window = find_ascii_ci_bytes(bounded, b"</a").unwrap_or(bounded.len());
+    let mut raw = String::new();
+    let mut in_tag = false;
+    for ch in html
+        .get(start..)
+        .unwrap_or_default()
+        .chars()
+        .scan(0_usize, |seen, ch| {
+            *seen += ch.len_utf8();
+            (*seen <= window).then_some(ch)
+        })
+    {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                raw.push(' ');
+            }
+            _ if !in_tag => raw.push(ch),
+            _ => {}
+        }
+    }
+    // Whitespace collapses but case stays: the title is shown as the engine wrote it.
+    let mut text = decode_html_entities(&raw)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    truncate_on_char_boundary(&mut text, MAX_ANCHOR_TEXT_BYTES);
+    text
+}
+
+/// Every result-anchor target on the page with that anchor's visible text.
+fn anchors(html: &str) -> Vec<(&str, String)> {
+    href_values(html)
+        .into_iter()
+        .map(|(href, end)| (href, anchor_text(html, end + 1)))
+        .collect()
+}
+
+fn href_values(html: &str) -> Vec<(&str, usize)> {
     // Search results are anchor targets, not arbitrary href-looking bytes in
     // stylesheets, metadata, comments, JavaScript, or hidden HTML templates.
     let bytes = html.as_bytes();
@@ -935,7 +1017,7 @@ fn href_values(html: &str) -> Vec<&str> {
             }
             if name.eq_ignore_ascii_case(b"a") {
                 if let Some(href) = anchor_href(html, index + 1 + name_end, end) {
-                    hits.push(href);
+                    hits.push((href, end));
                 }
             }
         }
@@ -1077,16 +1159,34 @@ mod tests {
     use crate::http::{Response, TransportFailure};
 
     #[test]
+    fn a_hit_keeps_the_visible_text_of_every_anchor_to_it() {
+        let html = concat!(
+            "<a href='https://example.org/p'><img src=x></a>",
+            "<a href='https://example.org/p'><b>Kylie</b> Trong &amp; Co</a>",
+            "<a href='https://example.org/q'>",
+        );
+        let hits = parse_hits(html, "brave");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].text, "Kylie Trong & Co");
+        assert!(hits[1].text.is_empty());
+        let long = format!("<a href='https://example.org/r'>{}</a>", "é".repeat(2000));
+        let hit = &parse_hits(&long, "brave")[0];
+        assert!(hit.text.len() <= MAX_ANCHOR_TEXT_BYTES && hit.text.starts_with('é'));
+    }
+
+    #[test]
     fn a_report_prints_an_address_from_the_page_as_text_on_one_line() {
         let report = SearchReport {
             hits: vec![
                 SearchHit {
                     engine: "duckduckgo".into(),
                     url: "https://a.example/x\u{1b}[2J\nbing\thttps://b.example/\u{2028}".into(),
+                    text: String::new(),
                 },
                 SearchHit {
                     engine: "mojeek".into(),
                     url: "https://c.example/ordinary?q=1&r=2".into(),
+                    text: String::new(),
                 },
             ],
             outcomes: vec![SourceExecutionOutcome::success("duckduckgo", 1, 1)],

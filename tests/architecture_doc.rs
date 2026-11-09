@@ -890,16 +890,14 @@ fn lookup_adapter_is_a_small_facade() {
 #[test]
 fn current_document_does_not_mark_reachable_commands_absent() {
     let markdown = doc();
-    let dispatch = read(&root().join("src/cli/mod.rs"));
+    // Every runnable command is declared once, in the registry the dispatcher reads.
+    let registry = read(&root().join("src/cli/commands.rs"));
     let mut commands = BTreeSet::new();
-    for line in dispatch.lines() {
-        let Some(rest) = line.split_once("Some(\"").map(|(_, rest)| rest) else {
+    for line in registry.lines() {
+        let Some(rest) = line.trim().strip_prefix("name: \"") else {
             continue;
         };
-        let Some((command, tail)) = rest.split_once("\")") else {
-            continue;
-        };
-        if tail.contains("=>") {
+        if let Some((command, _)) = rest.split_once('"') {
             commands.insert(command.to_owned());
         }
     }

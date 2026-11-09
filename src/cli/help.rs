@@ -17,13 +17,29 @@ use huntsman_recon::sf_compat::SF_USAGE;
 use huntsman_recon::username_cli::USERNAME_HELP;
 
 /// Usage error for a command word that the dispatcher does not know.
+/// `COMMAND --help`: the command's help, with the `--json` note for a typed lookup. A word that
+/// is not a command gets the usage error, not the general help: a typo answered with help and
+/// exit 0 hides itself.
+pub(super) fn print_command_help(command: &str) -> ExitCode {
+    let Some(text) = command_help(command) else {
+        return unknown_command(command);
+    };
+    if super::lookup::takes_json(command) {
+        println!("{text}\n{}", super::lookup::JSON_NOTE);
+    } else {
+        println!("{text}");
+    }
+    println!("  -h, --help  Show this help");
+    ExitCode::SUCCESS
+}
+
 pub(super) fn unknown_command(other: &str) -> ExitCode {
     usage_error(format!("unknown command: {other}"), USAGE)
 }
 
 /// Usage error for no command at all: the help on stderr, and nothing written.
 pub(super) fn no_command() -> ExitCode {
-    usage_error(HELP, USAGE)
+    usage_error(&*HELP, USAGE)
 }
 
 /// Usage error for an argument that is not UTF-8. The bytes are not echoed: an argument can
@@ -44,7 +60,7 @@ fn radar_help() -> &'static str {
 
 /// Separate the domain help from the command dispatcher to keep it bounded.
 fn domain_help() -> &'static str {
-    "domain DOMAIN [--save FILE]\nLook up one domain: certificate-transparency names from crt.sh, every certificate Cert Spotter logged for the domain and its subdomains in full (subject, serial, issuer, validity, revocation, names and the PEM; HUNTSMAN_CERTSPOTTER_KEY raises its limit), DNS records over DNS-over-HTTPS, the Spamhaus DBL and SURBL domain blocklists over the system resolver, and whether the filtering resolvers Spiderfoot asks (AdGuard, CleanBrowsing, Cloudflare, Comodo, DNS for Family, OpenDNS, Quad9, Yandex) block it, each after a name it is known to block (DNS-over-HTTPS, or UDP to the filter's own servers for Comodo, Quad9, DNS for Family and Yandex). Historical URLs and subdomains come from the Internet Archive's Wayback CDX index and the newest Common Crawl index, and the e-mail addresses and phone numbers up to three archived pages of each published become historical leads naming their capture, not proof they are current. The domain and every host and address the lookup found are checked against the threat feeds Spiderfoot downloads (abuse.ch Feodo Tracker, AlienVault IP Reputation, blocklist.de, botvrij.eu, CINS Army, CleanTalk, CyberCrime-Tracker, Emerging Threats, GreenSnow, OpenPhish, PhishTank, Steven Black's hosts, Tor's exit relays, VoIPBL and VXVault), each downloaded once and kept in $HUNTSMAN_HOME/feeds, else ~/.huntsman/feeds, until it is older than Spiderfoot keeps it. A list older than its window (30 days; blocklist.de's 48 hours, CleanTalk's seven days, Tor's three days), or a copy that cannot be refreshed and is that old, cannot say a subject is not listed, and what it lists is kept but not counted as a current threat or Tor exit. Pulsedive threat risk, Netlas scan data, AlienVault OTX threat pulses, urlscan.io public page scans, Robtex passive DNS and HackerTarget hosts under the domain are asked without a key (HUNTSMAN_PULSEDIVE_KEY, HUNTSMAN_NETLAS_KEY, HUNTSMAN_OTX_KEY, HUNTSMAN_URLSCAN_KEY and HUNTSMAN_HACKERTARGET_KEY raise their limits). With HUNTSMAN_VIRUSTOTAL_KEY set it adds VirusTotal engine verdicts, with HUNTSMAN_HUNTER_KEY the addresses Hunter.io found published for the domain, with HUNTSMAN_SHODAN_KEY Shodan DNS records (one query credit), with HUNTSMAN_LEAKIX_KEY LeakIX exposed services and leaks, with HUNTSMAN_THREATFOX_KEY ThreatFox IOCs, with HUNTSMAN_ABUSECH_KEY URLhaus malware URLs, with HUNTSMAN_SECTRAILS_KEY SecurityTrails subdomains, and with HUNTSMAN_WHOXY_KEY the live WHOIS record (one Whoxy credit); a leg whose key is not set makes no request, and a key that is set always runs its leg. --save writes an unverified ledger that verify can reload. Makes network requests."
+    "domain DOMAIN [--save FILE] [--json]\nLook up one domain: certificate-transparency names from crt.sh, every certificate Cert Spotter logged for the domain and its subdomains in full (subject, serial, issuer, validity, revocation, names and the PEM; HUNTSMAN_CERTSPOTTER_KEY raises its limit), DNS records over DNS-over-HTTPS, the Spamhaus DBL and SURBL domain blocklists over the system resolver, and whether the filtering resolvers Spiderfoot asks (AdGuard, CleanBrowsing, Cloudflare, Comodo, DNS for Family, OpenDNS, Quad9, Yandex) block it, each after a name it is known to block (DNS-over-HTTPS, or UDP to the filter's own servers for Comodo, Quad9, DNS for Family and Yandex). Historical URLs and subdomains come from the Internet Archive's Wayback CDX index and the newest Common Crawl index, and the e-mail addresses and phone numbers up to three archived pages of each published become historical leads naming their capture, not proof they are current. The domain and every host and address the lookup found are checked against the threat feeds Spiderfoot downloads (abuse.ch Feodo Tracker, AlienVault IP Reputation, blocklist.de, botvrij.eu, CINS Army, CleanTalk, CyberCrime-Tracker, Emerging Threats, GreenSnow, OpenPhish, PhishTank, Steven Black's hosts, Tor's exit relays, VoIPBL and VXVault), each downloaded once and kept in $HUNTSMAN_HOME/feeds, else ~/.huntsman/feeds, until it is older than Spiderfoot keeps it. A list older than its window (30 days; blocklist.de's 48 hours, CleanTalk's seven days, Tor's three days), or a copy that cannot be refreshed and is that old, cannot say a subject is not listed, and what it lists is kept but not counted as a current threat or Tor exit. Pulsedive threat risk, Netlas scan data, AlienVault OTX threat pulses, urlscan.io public page scans, Robtex passive DNS and HackerTarget hosts under the domain are asked without a key (HUNTSMAN_PULSEDIVE_KEY, HUNTSMAN_NETLAS_KEY, HUNTSMAN_OTX_KEY, HUNTSMAN_URLSCAN_KEY and HUNTSMAN_HACKERTARGET_KEY raise their limits). With HUNTSMAN_VIRUSTOTAL_KEY set it adds VirusTotal engine verdicts, with HUNTSMAN_HUNTER_KEY the addresses Hunter.io found published for the domain, with HUNTSMAN_SHODAN_KEY Shodan DNS records (one query credit), with HUNTSMAN_LEAKIX_KEY LeakIX exposed services and leaks, with HUNTSMAN_THREATFOX_KEY ThreatFox IOCs, with HUNTSMAN_ABUSECH_KEY URLhaus malware URLs, with HUNTSMAN_SECTRAILS_KEY SecurityTrails subdomains, and with HUNTSMAN_WHOXY_KEY the live WHOIS record (one Whoxy credit); a leg whose key is not set makes no request, and a key that is set always runs its leg. --save writes an unverified ledger that verify can reload. Makes network requests."
 }
 
 /// Separate the scan help from the command dispatcher to keep it bounded.
@@ -139,13 +155,14 @@ pub(super) fn command_help(command: &str) -> Option<&'static str> {
             "plan [--session-dir DIR] SEED [SEED ...] | plan --load-session DIR ID\nRun the offline investigation spine on one or more seeds: normalise them into entities and relations, analyse that one state, and plan the external routes without fetching them. --session-dir DIR saves the run as a session, and --load-session DIR ID prints a saved one. Offline."
         }
         "query" => {
-            "query QUERY...\nOptional: query --adaptive QUERY..., query --all QUERY..., query --adaptive --all QUERY... . Query the rebuilt keyless Bing, Brave, and Mojeek subset. --adaptive emits JSON with up to 3 feedback-directed query rounds, URL attribution by engine, typed outcomes and explicit limits (up to 9 engine executions, 18 HTTP attempts with retries); an engine that refused the first round is not asked again in that run. --all asks all 13 keyless engines instead (adding DuckDuckGo, Google, Yahoo, Ecosia, Startpage, Yandex, Yep, Lilo, You.com and Wiby) inside one 110-second budget, each request capped at 6 seconds; an engine the budget leaves out is reported as not queried, never as a zero result."
+            "query [--adaptive] [--all] QUERY... | query --exa QUERY...\nQuery the rebuilt keyless Bing, Brave, and Mojeek subset. --adaptive emits JSON with up to 3 feedback-directed query rounds, URL attribution by engine, typed outcomes and explicit limits (up to 9 engine executions, 18 HTTP attempts with retries); an engine that refused the first round is not asked again in that run. --all asks all 13 keyless engines instead (adding DuckDuckGo, Google, Yahoo, Ecosia, Startpage, Yandex, Yep, Lilo, You.com and Wiby) inside one 110-second budget, each request capped at 6 seconds; an engine the budget leaves out is reported as not queried, never as a zero result."
         }
         "sf" => SF_USAGE,
         "scans" => SCANS_HELP,
         "serve" => {
             "serve [--bind ADDR] [--history DIR]\nStart the embedded Web UI and JSON API, including GET /api/lookup (needs the X-Huntsman-Lookup: 1 header; each lookup is kept as a saved scan, listed under Scans and in scans list, and a request waits at most 150 seconds, then answers 504 with the scan, which runs on) and GET /api/analyze?seeds=... (offline multi-hop analysis, one seed per line, no network request). With --history DIR, each analysis also bridges its seeds to the saved scan artifacts in DIR, as correlate --history does, and reports the bridges as cross_scan; a directory that cannot be read, or holds a malformed artifact, stops serve at startup. Default: 127.0.0.1:8080. HSE_BIND supplies the default bind. A loopback bind needs no token; an explicit non-loopback bind requires HSE_AUTH_TOKEN."
         }
+        "mcp" => super::mcp::HELP,
         "modules" => {
             "modules [--json]\nList only rebuilt modules that are currently reachable through a huntsman-recon command."
         }

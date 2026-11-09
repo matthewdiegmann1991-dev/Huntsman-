@@ -53,7 +53,7 @@ use crate::wayback_cdx;
 
 mod resolve;
 
-pub const DOMAIN_USAGE: &str = "usage: huntsman-recon domain DOMAIN [--save FILE]";
+pub const DOMAIN_USAGE: &str = "usage: huntsman-recon domain DOMAIN [--save FILE] [--json]";
 
 /// The DNS leg's module name, on its outcome row and its evidence.
 const DNS_SOURCE: &str = "dns";

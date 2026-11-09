@@ -14,13 +14,7 @@ use huntsman_recon::web_server::{LookupError, LookupQuery, LookupReport};
 pub const HELP: &str = "public-osint news|notices|web|dossier QUERY...\nKeyless GDELT news, FBI wanted notices, and Huntsman's existing web engines. Read-only. Results are leads, not verified accusations.";
 
 fn source_for(input: &str) -> Option<Source> {
-    match input {
-        "news" => Some(Source::News),
-        "notices" => Some(Source::Notices),
-        "web" => Some(Source::Web),
-        "dossier" => Some(Source::All),
-        _ => None,
-    }
+    Source::parse(input)
 }
 
 fn transport() -> UreqTransport {

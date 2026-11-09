@@ -87,11 +87,20 @@ struct LookupWithSynergy<'a> {
     synergy: crate::osint_synergy::SynergyReport,
 }
 
-fn serialize_lookup(report: &LookupReport) -> Result<String, serde_json::Error> {
-    serde_json::to_string(&LookupWithSynergy {
+fn with_synergy(report: &LookupReport) -> LookupWithSynergy<'_> {
+    LookupWithSynergy {
         report,
         synergy: crate::osint_synergy::discover(&report.entities),
-    })
+    }
+}
+
+fn serialize_lookup(report: &LookupReport) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&with_synergy(report))
+}
+
+/// The one JSON shape of a finished lookup, as `/api/lookup` answers it, for other front ends.
+pub(super) fn lookup_value(report: &LookupReport) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::to_value(with_synergy(report))
 }
 
 /// `GET /api/lookup`: one lookup, answered with its report. With saved scans on, the lookup runs

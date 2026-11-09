@@ -158,6 +158,7 @@ pub fn search_official_x<T: Transport + ?Sized>(
                 report.hits.push(SearchHit {
                     engine: "official_x_recent_search".to_owned(),
                     url: format!("https://x.com/i/web/status/{id}"),
+                    text: String::new(),
                 });
             } else {
                 invalid_posts = true;

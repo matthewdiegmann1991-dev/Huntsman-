@@ -1510,7 +1510,7 @@ const REACHABLE_MODULES: &[ReachableModule] = &[
     },
     ReachableModule {
         name: "seeknow",
-        command: "seeknow SUBCOMMAND",
+        command: "seeknow status|credits [--keys FILE] | seeknow search KIND VALUE [--deep|--fast-only] [--keys FILE]",
         access: "operator_key",
         network: true,
         category: ModuleCategory::Breach,

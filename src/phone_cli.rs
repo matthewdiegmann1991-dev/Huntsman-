@@ -24,9 +24,9 @@ use crate::numverify;
 use crate::phone_intl;
 use crate::source_outcome::SourceExecutionOutcome;
 
-pub const PHONE_USAGE: &str = "usage: huntsman-recon phone NUMBER [--save FILE]";
+pub const PHONE_USAGE: &str = "usage: huntsman-recon phone NUMBER [--save FILE] [--json]";
 pub const PHONE_HELP: &str = "\
-phone NUMBER [--save FILE]
+phone NUMBER [--save FILE] [--json]
 Canonicalise a phone number offline, resolve its international dialling prefix, and enrich Australian numbers with numbering-plan line type and coarse region; an Australian mobile also carries its ACMA numbering-register block — the range's original allocatee and date and its latest holder and transfer date, or that the block is spare — read offline from an embedded copy of the regulator's register (the holder is the range's registered holder, never the carrier serving the number today nor the subscriber). A +1 number is held to the North American Numbering Plan: one the plan cannot hold (an area code or exchange beginning 0 or 1, an N11 code, a reserved area code) is refused with the rule it breaks; otherwise it gets its local (NPA) NXX-XXXX and international +1 NPA NXX XXXX forms, whether it is geographic, toll-free, premium or another service code, the country or territory its area code belongs to (Canada, the Caribbean countries and US territories by list, the United States otherwise), and a flag for the 555-0100 to 555-0199 numbers set aside for fiction. A +971 number is read against the UAE plan: a fixed line's area and the emirates in it (04 is Dubai, AE-DU; 02 Abu Dhabi, 03 Al Ain, 06 Sharjah, Ajman and Umm Al Quwain, 07 Ras Al Khaimah, 09 Fujairah), a mobile range (50, 52 to 56, 58) or a toll-free, universal access (600), shared-cost or premium-rate range, with its local (04 312 3456) and international (+971 4 312 3456) forms; no operator or address is inferred. Digits may be written in Arabic-Indic or Persian form. With HUNTSMAN_NUMVERIFY_KEY set it also asks Numverify (APILayer) for the carrier, line type and location, and with HUNTSMAN_IPQS_KEY set IPQualityScore for line type, carrier and fraud score; without a key no request is made. --save FILE writes an unverified ledger that verify can reload.";
 
 const PHONE_CONFIDENCE: f64 = 0.90;

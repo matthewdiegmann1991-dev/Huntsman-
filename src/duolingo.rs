@@ -132,11 +132,19 @@ fn interpret(
                 "Duolingo users mix named accounts and blank records",
             ));
         }
-        // Duolingo returns a user stub with blank public fields (empty username and name, id 0)
-        // for a registered address whose profile it now withholds, and an empty list for an
-        // address with no account. The stub's presence is the account-existence signal, so it is
-        // a confirmed low-detail match, never schema drift. Its blank fields are not fabricated
-        // into a handle; only the queried address is kept.
+        // Duolingo returns a user stub with blank public fields for a registered address whose
+        // profile it now withholds (live 2026-11-08: `{"name":"","id":0,"hasPlus":false,
+        // "username":""}`), and an empty list for an address with no account. The stub's
+        // presence is the account-existence signal, so it is a confirmed low-detail match.
+        // The stub *carries* the username field, blank: a record without it, or with null, is a
+        // renamed or removed field, and calling that an account would report one for every
+        // address. Its blank fields are not fabricated into a handle; only the address is kept.
+        if users.iter().any(|user| user.username.is_none()) {
+            return Err(failed(
+                SourceOutcomeKind::SchemaDrift,
+                "Duolingo users carry no username field",
+            ));
+        }
         let mut entities = Vec::new();
         add_withheld_account(email, scan_id, &mut entities);
         return Ok(Report {
@@ -394,7 +402,9 @@ mod tests {
         // 2026-11-04); the stub's presence confirms the account.
         for body in [
             r#"{"users":[{"name":"","id":0,"username":""}]}"#,
-            r#"{"users":[{"id":3}]}"#,
+            // The exact live stub for a reserved canary address, 2026-11-08.
+            r#"{"users":[{"name":"","id":0,"hasPlus":false,"username":""}]}"#,
+            r#"{"users":[{"id":3,"username":"  "}]}"#,
         ] {
             let report = lookup(
                 &OneResponse::json(200, body),
@@ -419,6 +429,25 @@ mod tests {
                     .any(|e| e.kind == EntityKind::Username)
             );
             assert!(!report.entities.iter().any(|e| e.kind == EntityKind::Url));
+        }
+    }
+
+    #[test]
+    fn a_record_without_the_username_field_is_drift_never_an_account() {
+        // A renamed or removed field must not read as "account exists" for every address.
+        for body in [
+            r#"{"users":[{"id":3}]}"#,
+            r#"{"users":[{"id":0,"name":"","username":null}]}"#,
+            r#"{"users":[{"id":0,"name":"","handle":""}]}"#,
+            r#"{"users":[{"id":0,"username":""},{"id":0}]}"#,
+        ] {
+            let report = lookup(&OneResponse::json(200, body), "a@example.com", "s", 1).unwrap();
+            assert_eq!(
+                report.outcome.kind,
+                SourceOutcomeKind::SchemaDrift,
+                "{body}"
+            );
+            assert!(report.entities.is_empty(), "{body}");
         }
     }
 

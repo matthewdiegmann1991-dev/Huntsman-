@@ -179,7 +179,7 @@ fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
 }
 
 /// `/api/lookup` over the same routing and front-ends as `scan`.
-fn web_lookup(query: &LookupQuery) -> Result<LookupReport, LookupError> {
+pub(super) fn web_lookup(query: &LookupQuery) -> Result<LookupReport, LookupError> {
     if let Some(result) = super::public_osint::web_lookup(query) {
         return result;
     }
@@ -224,9 +224,22 @@ fn web_lookup(query: &LookupQuery) -> Result<LookupReport, LookupError> {
     }
 }
 
+/// How a library refusal reaches a JSON API or MCP client: a refused input is the caller's
+/// mistake (400), anything else is a failure upstream (502).
+fn adapter_error(error: &Error) -> LookupError {
+    LookupError {
+        status: if matches!(error, Error::Invalid(_)) {
+            400
+        } else {
+            502
+        },
+        message: error.to_string(),
+    }
+}
+
 /// POST /api/people/discover delegates to the identical library discovery
 /// function as `people-discover`, keeping the web page free of custom scrapers.
-fn web_people_discover(
+pub(super) fn web_people_discover(
     name: &str,
     region: huntsman_recon::people_discovery::Region,
 ) -> Result<serde_json::Value, LookupError> {
@@ -234,14 +247,7 @@ fn web_people_discover(
         huntsman_recon::http::UreqTransport::new(&huntsman_recon::http::TransportConfig::default());
     let report =
         huntsman_recon::people_discovery::discover(&transport, name, region, clock::unix_now())
-            .map_err(|error| LookupError {
-                status: if matches!(error, Error::Invalid(_)) {
-                    400
-                } else {
-                    502
-                },
-                message: error.to_string(),
-            })?;
+            .map_err(|error| adapter_error(&error))?;
     serde_json::to_value(report).map_err(|error| LookupError {
         status: 500,
         message: format!("people discovery JSON unavailable: {error}"),
@@ -250,7 +256,7 @@ fn web_people_discover(
 
 /// /api/research uses the same bounded, keyless adaptive search as `query --adaptive`.
 /// The server handles capacity and same-origin controls; this adapter owns the transport.
-fn web_research(query: &str) -> Result<serde_json::Value, LookupError> {
+pub(super) fn web_research(query: &str) -> Result<serde_json::Value, LookupError> {
     let transport =
         huntsman_recon::http::UreqTransport::new(&huntsman_recon::http::TransportConfig::default());
     let report = huntsman_recon::web_query::adaptive_search(
@@ -259,14 +265,7 @@ fn web_research(query: &str) -> Result<serde_json::Value, LookupError> {
         clock::unix_now(),
         huntsman_recon::web_query::EngineSet::Default,
     )
-    .map_err(|error| LookupError {
-        status: if matches!(error, Error::Invalid(_)) {
-            400
-        } else {
-            502
-        },
-        message: error.to_string(),
-    })?;
+    .map_err(|error| adapter_error(&error))?;
     Ok(serde_json::json!({
         "route": "adaptive_web_search",
         "report": report,
