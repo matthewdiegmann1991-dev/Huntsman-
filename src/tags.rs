@@ -18,6 +18,11 @@ pub const UNRESOLVED: &str = "unresolved";
 /// domain's (`githuh.com`, `g00gle.com`); Spiderfoot reports it as `SIMILARDOMAIN`. It says the
 /// names are confusable, not who holds either.
 pub const LOOKALIKE: &str = "lookalike";
+/// More than `ip_cli::MAX_COHOSTS` names resolved to the address, so it is a hosting provider's
+/// or an anycast service's: a name that resolved to it links to that service, not to whoever the
+/// lookup is about. The address and each such name carry this tag, and the names sit below the
+/// floor a recursive scan follows, so a crawl never pivots through them.
+pub const SHARED_HOSTING: &str = "shared-hosting";
 /// The address is announced by an Australian consumer internet provider's AS (Telstra, Optus,
 /// TPG, …): the operator's market, not proof that the address is a home connection.
 pub const AU_CONSUMER_ISP: &str = "au-consumer-isp";
