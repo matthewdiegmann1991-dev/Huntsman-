@@ -29,6 +29,26 @@ pub enum Source {
     All,
 }
 
+impl Source {
+    /// Every source by the name the CLI, `serve`'s `/api/lookup` and the MCP `lookup` tool
+    /// accept for it, in that order.
+    pub const NAMED: [(&'static str, Self); 4] = [
+        ("news", Self::News),
+        ("notices", Self::Notices),
+        ("web", Self::Web),
+        ("dossier", Self::All),
+    ];
+
+    /// The source a name selects, or `None` for any other word. **Pure.**
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::NAMED
+            .iter()
+            .find(|(known, _)| *known == name)
+            .map(|(_, source)| *source)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
     pub query: String,

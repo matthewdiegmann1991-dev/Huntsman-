@@ -146,6 +146,7 @@ lookup_modules	runtime	the modules each lookup kind asks, reached through scans 
 lookup_report	leaf	shared text report of an identifier lookup
 lookup_save	exporter	shared unverified lookup ledger persistence
 maltiverse	adapter	Maltiverse leg reached through indicator_legs from ip, domain, scan and /api/lookup
+mcp	runtime	Model Context Protocol stdio server reached from mcp; its lookup, people_discover and research tools run the adapters serve installs for /api/lookup, /api/people/discover and /api/research
 md5	leaf	MD5 primitive for protocols that require public MD5 identifiers
 meta_plan	runtime	meta-plan validation consumed by the runtime
 metrics	runtime	shared scan metrics

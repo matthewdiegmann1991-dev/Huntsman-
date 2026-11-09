@@ -226,6 +226,7 @@ cargo run -- sf -M                         # SpiderFoot-style reachable-module l
 cargo run -- scans types                   # Spiderfoot 4.0's 172 data-element types plus Huntsman's own; offline
 cargo run -- scans rules                   # every correlation rule a saved scan runs: Huntsman's own and Spiderfoot 4.0's 37; offline
 cargo run -- serve --help                    # embedded UI/API command options; does not start a listener
+cargo run -- mcp --help                      # LLM tool server (Model Context Protocol over stdio) options; does not start it
 cargo run -- modules --json               # only modules currently reachable from the binary
 cargo run -- attack status --json          # offline ATT&CK Reconnaissance capability posture
 cargo run -- recon crtsh https://example.com/
@@ -616,6 +617,32 @@ The listener bounds the request line and headers to 33 KiB, enough for the large
 
 On Termux (Android, aarch64, no root) the default bind `127.0.0.1:8080` needs no root and no port below 1024: run `huntsman-recon serve` and open `http://127.0.0.1:8080/` in the phone's browser. If another server already holds 8080, pass `--bind 127.0.0.1:0` and use the address on the `serving=` line; [Keep serve running on Android](INSTALL.md#keep-serve-running-on-android) covers that and keeping the server alive in the background. Keys come from the same environment and `~/.huntsman.env` chain as the CLI, so export them in the Termux session before `serve`. The legacy monolith's other endpoints are not rebuilt.
 
+
+### Use from LLM applications (MCP)
+
+`huntsman-recon mcp` runs the binary as a [Model Context Protocol](https://modelcontextprotocol.io) server over standard input and output, so Claude Desktop, Claude Code, Cursor and any other MCP client can call Huntsman as a tool. It speaks protocol revisions 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05, one JSON-RPC message per line, and writes nothing else to standard output. It opens no port and makes no network request until a tool is called.
+
+| Tool | Arguments | Runs |
+|---|---|---|
+| `lookup` | `selector`; `kind` (`auto`, `people`, `email`, `exposure`, `username`, `phone`, `domain`, `ip`, `netblock`, `asn`, `network`, `crypto`, `geocode`, `news`, `notices`, `web`, `dossier`); `detail` (`summary` or `full`) | the same lookup as `GET /api/lookup` |
+| `people_discover` | `name`; `region` (`au`, `us`, `ae`) | the same discovery as `POST /api/people/discover` |
+| `research` | `query` | the same adaptive search as `query --adaptive` |
+
+Each tool runs exactly as the JSON API runs it: the same keys from the environment and `~/.huntsman.env`, the same public-only egress, the same source outcomes. A lookup answers with a `summary` by default: every source outcome, how many entities of each kind were found, and the most confident entities with up to six evidence records each, within about 48 KiB, with every cut counted. A busy IP address or domain finds thousands of entities, megabytes that no model can read at once. `detail: "full"` returns the report whole, as `/api/lookup` does. A refused selector or a failed lookup comes back as a tool error the model can read and correct.
+
+Register it by the binary's absolute path. In Claude Code:
+
+```sh
+claude mcp add huntsman -- "$(command -v huntsman-recon)" mcp
+```
+
+In Claude Desktop, Cursor or another client that reads an `mcpServers` file:
+
+```json
+{ "mcpServers": { "huntsman": { "command": "/data/data/com.termux/files/usr/bin/huntsman-recon", "args": ["mcp"] } } }
+```
+
+In Termux the path is `$PREFIX/bin/huntsman-recon` after `install.sh`. A client running in Termux, or one that reaches the phone over SSH (`"command": "ssh", "args": ["phone", "huntsman-recon", "mcp"]`), runs it as is, with no root.
 
 ### Batch scan input
 

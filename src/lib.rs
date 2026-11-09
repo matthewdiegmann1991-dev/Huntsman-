@@ -166,6 +166,7 @@ pub mod lookup_report;
 pub mod lookup_save;
 pub mod maltiverse;
 pub mod mastodon_user;
+pub mod mcp;
 pub mod md5;
 pub mod meta_plan;
 pub mod metadata_identifiers;
