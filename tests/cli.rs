@@ -177,7 +177,10 @@ fn help_and_version_are_available() {
         ("investigate", "investigate TEXT..."),
         ("modules", "modules [--json]"),
         ("attack", "attack status|coverage|gaps [--json]"),
-        ("query", "query QUERY..."),
+        (
+            "query",
+            "query [--adaptive] [--all] QUERY... | query --exa QUERY...",
+        ),
         ("research", "research [--plan] [--all] TERM..."),
         ("sf", "sf [-M|-T|-V]"),
         ("serve", "serve [--bind ADDR] [--history DIR]"),
@@ -1585,7 +1588,10 @@ fn query_engine_options_are_checked_before_any_request() {
     let help = bin().args(["query", "--help"]).output().unwrap();
     assert!(help.status.success());
     let help = String::from_utf8(help.stdout).unwrap();
-    assert!(help.contains("query --all QUERY..."), "{help}");
+    assert!(
+        help.contains("query [--adaptive] [--all] QUERY..."),
+        "{help}"
+    );
     assert!(help.contains("110-second budget"), "{help}");
 }
 

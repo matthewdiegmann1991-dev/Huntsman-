@@ -75,7 +75,7 @@ registry! {
     name: "build-sha", summary: "Print the embedded source commit or unknown",
     synopsis: "build-sha", run: super::meta::build_sha_cmd;
     name: "command", summary: "Print and validate the executable engineering hierarchy",
-    synopsis: "command", run: super::meta::command_cmd;
+    synopsis: "command [--json]", run: super::meta::command_cmd;
     name: "directive", summary: "Verify or repair canonical repository instruction mirrors",
     synopsis: "directive check|sync [ROOT]", run: super::meta::directive_cmd;
     name: "geo", summary: "Distance between two LAT,LON coordinates in metres",
@@ -143,15 +143,15 @@ registry! {
     name: "docmeta", summary: "Extract XMP-packet and PDF /Info metadata, with embedded GPS, from a local file (keyless, offline)",
     synopsis: "docmeta FILE", run: super::lookup::docmeta_cmd;
     name: "apk", summary: "Inventory or compare two APK ZIP archives offline (keyless, no root)",
-    synopsis: "apk FILE [--json] | apk diff OLD NEW [--json]", run: super::apk::apk_cmd;
+    synopsis: "apk FILE [--json] | apk diff OLD NEW [--json] | apk set FILE [--json]", run: super::apk::apk_cmd;
     name: "source-intel", summary: "Project APK DEX URLs into offline evidence-scoped source leads",
     synopsis: "source-intel apk FILE --json", run: super::source_intel::run;
     name: "mitm", summary: "Offline or live advisory MITM/evil-twin audit",
-    synopsis: "mitm audit [--file FILE] [--baseline FILE] [--json]", run: super::mitm::mitm_cmd;
+    synopsis: "mitm audit [--file FILE] [--baseline FILE] [--json] [--require-evaluated] | mitm baseline --ssid SSID --bssid MAC... --minimum-security LEVEL --output FILE --confirmed", run: super::mitm::mitm_cmd;
     name: "radar", summary: "Read rootless Termux:API OS-cached WiFi/cells, import offline radio CSV, or track sweeps",
     synopsis: "radar wifi|cells [--json] [--file TERMUX_SCAN_JSON] | radar survey-lte|survey-nr|survey-wifi|survey-bluetooth --file NETWORK_SURVEY_CSV [--json] | radar track [--json] [--wifi-file FILE] [--cells-file FILE] [--log FILE]", run: super::radar::radar_cmd;
     name: "scan", summary: "Route one selector or bounded seed-list into rebuilt lookup front-ends",
-    synopsis: "scan SELECTOR [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save FILE] | scan --input-file FILE [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save-dir DIR]", run: super::lookup::scan_cmd;
+    synopsis: "scan SELECTOR [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save FILE] | scan --input-file FILE [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save-dir DIR] | scan --recurse SELECTOR... [--max-generations N] [--expand-floor F] [--json]", run: super::lookup::scan_cmd;
     name: "investigate", summary: "Extract actionable entities from local text or one bounded file",
     synopsis: "investigate TEXT...|--file FILE", run: super::lookup::investigate_cmd;
     name: "plan", summary: "Plan an offline investigation from seeds; save or reload it as a session",
@@ -187,7 +187,7 @@ registry! {
     name: "recon", summary: "One crt.sh, DNS/mail, or stolen.tax lookup (network access)",
     synopsis: "recon crtsh TARGET|dns TARGET|stolen-tax QUERY [--keys FILE]", run: super::network::recon_cmd;
     name: "seeknow", summary: "SeekNow/See-Know lookup (opt-in; needs HUNTSMAN_SEEKNOW_KEY)",
-    synopsis: "seeknow SUBCOMMAND", run: super::network::seeknow_cmd;
+    synopsis: "seeknow status|credits [--keys FILE] | seeknow search KIND VALUE [--deep|--fast-only] [--keys FILE]", run: super::network::seeknow_cmd;
     name: "keys", summary: "Inspect a private keys file, or set/remove a slot via private storage",
     synopsis: "keys FILE|set SLOT --stdin|remove SLOT", run: super::meta::keys_cmd;
     name: "credential-status", summary: "Show provider credential completeness without values",
@@ -255,6 +255,125 @@ mod tests {
             assert!(
                 named.contains(command.name),
                 "{} is not in the usage line",
+                command.name
+            );
+        }
+    }
+
+    /// The words of a synopsis, with its `|`, `[]` and `()` grouping removed.
+    fn words(synopsis: &str) -> Vec<&str> {
+        synopsis
+            .split(|c: char| c.is_whitespace() || matches!(c, '|' | '[' | ']' | '(' | ')'))
+            .filter(|word| !word.is_empty())
+            .collect()
+    }
+
+    /// The options a synopsis names: `--word` and `-x`.
+    fn flags(synopsis: &str) -> BTreeSet<&str> {
+        words(synopsis)
+            .into_iter()
+            .filter(|word| {
+                word.starts_with('-')
+                    && word
+                        .trim_start_matches('-')
+                        .chars()
+                        .next()
+                        .is_some_and(char::is_alphabetic)
+            })
+            .collect()
+    }
+
+    /// The subcommands a help synopsis names: the lower-case word after the command name in
+    /// each alternative (`apk diff`, `keys set`, `attack status|coverage`), never a value
+    /// placeholder (`FILE`) or an option.
+    fn subcommands<'a>(name: &str, synopsis: &'a str) -> BTreeSet<&'a str> {
+        synopsis
+            .split(" | ")
+            .filter_map(|alternative| {
+                let rest = alternative
+                    .strip_prefix(name)
+                    .map_or(alternative, str::trim_start);
+                rest.split_whitespace().next()
+            })
+            .flat_map(|first| first.split('|'))
+            .filter(|word| {
+                !word.is_empty()
+                    && !word.starts_with('-')
+                    && word
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            })
+            .collect()
+    }
+
+    /// The synopsis lines of a command's own help: its leading lines that start with the command
+    /// name (after any `usage: huntsman-recon` prefix) and do not end a sentence (`TOKEN...`
+    /// is a synopsis, not a sentence).
+    fn help_synopsis(name: &str, help: &str) -> String {
+        help.lines()
+            .map(|line| line.strip_prefix("usage: huntsman-recon ").unwrap_or(line))
+            .take_while(|line| {
+                (*line == name || line.starts_with(&format!("{name} ")))
+                    && (!line.ends_with('.') || line.ends_with("..."))
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// The usage line is one line for every command, so a synopsis there may abbreviate the
+    /// command's own help with `SUBCOMMAND`, `[ARGS]` or `[options]`. It may never name an
+    /// option the help does not, and unless it abbreviates, it names every option and every
+    /// subcommand the help does: a command whose usage synopsis lags its help is one no one can
+    /// find from the usage line (as `apk set`, `scan --recurse` and `mitm baseline` were).
+    #[test]
+    fn the_usage_line_abbreviates_each_commands_help_and_invents_nothing() {
+        let body = USAGE
+            .strip_prefix("usage: huntsman-recon [")
+            .and_then(|rest| rest.strip_suffix(']'))
+            .expect("the usage line's frame");
+        for command in COMMANDS {
+            let usage: Vec<&str> = body
+                .split(" | ")
+                .filter(|alternative| {
+                    *alternative == command.name
+                        || alternative.starts_with(&format!("{} ", command.name))
+                })
+                .collect();
+            let usage = usage.join(" | ");
+            let help = super::super::help::command_help(command.name).expect(command.name);
+            let help = help_synopsis(command.name, help);
+            assert!(
+                !help.is_empty(),
+                "{}: its help opens with no synopsis",
+                command.name
+            );
+            let (usage_flags, help_flags) = (flags(&usage), flags(&help));
+            let invented: Vec<&&str> = usage_flags.difference(&help_flags).collect();
+            assert!(
+                invented.is_empty(),
+                "{}: the usage line names options its help does not: {invented:?}\n  usage: {usage}\n  help:  {help}",
+                command.name
+            );
+            let abbreviates = ["SUBCOMMAND", "[ARGS]", "[options]"]
+                .iter()
+                .any(|placeholder| usage.contains(placeholder));
+            if abbreviates {
+                continue;
+            }
+            let missing: Vec<&&str> = help_flags.difference(&usage_flags).collect();
+            assert!(
+                missing.is_empty(),
+                "{}: its help names options the usage line lacks: {missing:?}\n  usage: {usage}\n  help:  {help}",
+                command.name
+            );
+            let usage_words: BTreeSet<&str> = words(&usage).into_iter().collect();
+            let missing: Vec<&str> = subcommands(command.name, &help)
+                .into_iter()
+                .filter(|subcommand| !usage_words.contains(subcommand))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "{}: its help names subcommands the usage line lacks: {missing:?}\n  usage: {usage}\n  help:  {help}",
                 command.name
             );
         }
