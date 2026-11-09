@@ -49,7 +49,7 @@ use crate::virustotal;
 pub const IP_USAGE: &str = "usage: huntsman-recon ip ADDRESS [--save FILE] [--json]";
 pub const IP_HELP: &str = "\
 ip ADDRESS [--save FILE] [--json]
-Look up one public IPv4 or IPv6 address: the names its PTR records carry, its network's RDAP registration (range, holder, contacts and the record as published), the names Mnemonic passive DNS saw answering with the address, open ports, hostnames, CPEs and known CVEs from Shodan InternetDB, the covering prefix and origin AS from RIPEstat (and whether an Australian consumer provider or AARNet holds that AS) with the RPKI route-origin validation state of each announcing AS, the other origin AS numbers RIS peers saw announcing a prefix containing the address over its routing history (at least 10 peers, most recent first; a transfer, an anycast or multi-homed operator, a leak or a hijack, never proof of any) (valid, invalid_asn, invalid_length or unknown, with the ROAs it was judged against; an invalid state also tags the address rpki_invalid_origin and is a misconfiguration, a stale ROA or a hijack, not proof of any), internet-scanner status from GreyNoise Community (IPv4 only), threat risk from Pulsedive, scan data from Netlas, threat pulses from AlienVault OTX, public page scans from urlscan.io, hostname, network and city from IPinfo, the route and passive DNS names from Robtex, domains hosted on the address from HackerTarget, forum-spam reports from StopForumSpam, and listings on the Spamhaus ZEN, SpamCop, UCEPROTECT, DroneBL and SURBL blocklists over the system resolver, all keyless (a listing of the address's range by policy, such as Spamhaus's PBL, or of its network or AS, such as UCEPROTECT's levels 2 and 3, is kept but marks it malicious only when it records the address's own abuse; SORBS, which has shut down, is not asked). The address and every name the lookup found are checked against the threat feeds Spiderfoot downloads (abuse.ch Feodo Tracker, AlienVault IP Reputation, blocklist.de, botvrij.eu, CINS Army, CleanTalk, CyberCrime-Tracker, Emerging Threats, GreenSnow, OpenPhish, PhishTank, Steven Black's hosts, Tor's exit relays, VoIPBL and VXVault), each downloaded once and kept in $HUNTSMAN_HOME/feeds, else ~/.huntsman/feeds, until it is older than Spiderfoot keeps it. A list older than its window (30 days; blocklist.de's 48 hours, CleanTalk's seven days, Tor's three days), or a copy that cannot be refreshed and is that old, cannot say a subject is not listed, and what it lists is kept but not counted as a current threat or Tor exit. With HUNTSMAN_ABUSEIPDB_KEY set it adds AbuseIPDB abuse reports, with HUNTSMAN_VIRUSTOTAL_KEY VirusTotal engine verdicts, with HUNTSMAN_SHODAN_KEY Shodan services, with HUNTSMAN_LEAKIX_KEY LeakIX exposed services and leaks, with HUNTSMAN_THREATFOX_KEY ThreatFox IOCs, with HUNTSMAN_ABUSECH_KEY URLhaus malware URLs (IPv4 only), and with HUNTSMAN_IPQS_KEY the IPQualityScore fraud score and proxy/VPN flags; HUNTSMAN_GREYNOISE_KEY, HUNTSMAN_PULSEDIVE_KEY and HUNTSMAN_NETLAS_KEY raise those limits. A leg whose key is not set makes no request, and a key that is set always runs its leg. A private, loopback, documentation or other non-public address is refused before any request. --save FILE writes an unverified ledger that verify can reload. Makes network requests.";
+Look up one public IPv4 or IPv6 address: the names its PTR records carry, its network's RDAP registration (range, holder, contacts and the record as published), the names Mnemonic passive DNS saw answering with the address, open ports, hostnames, CPEs and known CVEs from Shodan InternetDB, the covering prefix and origin AS from RIPEstat (and whether an Australian consumer provider or AARNet holds that AS) with the RPKI route-origin validation state of each announcing AS, the other origin AS numbers RIS peers saw announcing a prefix containing the address over its routing history (at least 10 peers, most recent first; a transfer, an anycast or multi-homed operator, a leak or a hijack, never proof of any) (valid, invalid_asn, invalid_length or unknown, with the ROAs it was judged against; an invalid state also tags the address rpki_invalid_origin and is a misconfiguration, a stale ROA or a hijack, not proof of any), internet-scanner status from GreyNoise Community (IPv4 only), threat risk from Pulsedive, scan data from Netlas, threat pulses from AlienVault OTX, public page scans from urlscan.io, hostname, network and city from IPinfo, the route and passive DNS names from Robtex, domains hosted on the address from HackerTarget, forum-spam reports from StopForumSpam, and listings on the Spamhaus ZEN, SpamCop, UCEPROTECT, DroneBL and SURBL blocklists over the system resolver, all keyless (a listing of the address's range by policy, such as Spamhaus's PBL, or of its network or AS, such as UCEPROTECT's levels 2 and 3, is kept but marks it malicious only when it records the address's own abuse; SORBS, which has shut down, is not asked). The address and every name the lookup found are checked against the threat feeds Spiderfoot downloads (abuse.ch Feodo Tracker, AlienVault IP Reputation, blocklist.de, botvrij.eu, CINS Army, CleanTalk, CyberCrime-Tracker, Emerging Threats, GreenSnow, OpenPhish, PhishTank, Steven Black's hosts, Tor's exit relays, VoIPBL and VXVault), each downloaded once and kept in $HUNTSMAN_HOME/feeds, else ~/.huntsman/feeds, until it is older than Spiderfoot keeps it. A list older than its window (30 days; blocklist.de's 48 hours, CleanTalk's seven days, Tor's three days), or a copy that cannot be refreshed and is that old, cannot say a subject is not listed, and what it lists is kept but not counted as a current threat or Tor exit. With HUNTSMAN_ABUSEIPDB_KEY set it adds AbuseIPDB abuse reports, with HUNTSMAN_VIRUSTOTAL_KEY VirusTotal engine verdicts, with HUNTSMAN_SHODAN_KEY Shodan services, with HUNTSMAN_LEAKIX_KEY LeakIX exposed services and leaks, with HUNTSMAN_THREATFOX_KEY ThreatFox IOCs, with HUNTSMAN_ABUSECH_KEY URLhaus malware URLs (IPv4 only), and with HUNTSMAN_IPQS_KEY the IPQualityScore fraud score and proxy/VPN flags; HUNTSMAN_GREYNOISE_KEY, HUNTSMAN_PULSEDIVE_KEY and HUNTSMAN_NETLAS_KEY raise those limits. A leg whose key is not set makes no request, and a key that is set always runs its leg. A private, loopback, documentation or other non-public address is refused before any request. More than 100 names resolving to the address (Spiderfoot's co-host cap) is shared hosting: the address and those names are tagged shared-hosting and the names' confidence falls below the floor a recursive scan follows, so a crawl does not pivot through a hosting provider or an anycast service; every name stays in the report with its evidence. --save FILE writes an unverified ledger that verify can reload. Makes network requests.";
 
 /// Confidence of the queried address itself.
 const SEED_CONFIDENCE: f64 = 0.90;
@@ -58,6 +58,21 @@ const PIVOT_CONFIDENCE: f64 = 0.60;
 /// Confidence of a name the address's own reverse zone publishes: its operator named it, though
 /// the name is not checked to resolve back.
 const PTR_CONFIDENCE: f64 = 0.80;
+
+/// The most names that can resolve to one address before it is shared hosting: Spiderfoot's
+/// `sfp_dnsresolve` `maxcohost` default. Past it, a name that resolved to the address links to a
+/// hosting provider or an anycast service (8.8.8.8 had 1,680 such names), not to whoever the
+/// lookup is about.
+pub const MAX_COHOSTS: usize = 100;
+
+/// The confidence of a co-hosted name on a shared address: kept in the report with its evidence,
+/// below the floor a recursive scan follows ([`crate::gap::EXPAND_FLOOR`]), so a crawl never
+/// pivots through a hosting provider. A name a stronger source also links keeps that higher
+/// confidence when the entities merge.
+pub const SHARED_HOSTING_CONFIDENCE: f64 = 0.30;
+
+/// The provenance of the judgements this front end adds itself, beside its sources'.
+const FRONT_END_SOURCE: &str = "ip_cli";
 
 /// What the lookup found: its entities and each source's row.
 pub type Report = crate::lookup_report::LookupReport;
@@ -275,6 +290,7 @@ pub fn run<T: Transport + ?Sized>(
         );
     }
     merge_by_uid(&mut report.entities);
+    cap_cohosts(&mut report, &ip, &scan_id);
     // The CLI's exit codes (ARCHITECTURE.md): a request refused before sending is 77, no usable
     // response 69. One authority reads the rows: no accepted row and one refused is a refusal,
     // else the first transport failure or other reason is "no source answered".
@@ -330,6 +346,50 @@ fn ptr_leg<T: Transport + ?Sized>(transport: &T, lookup: &mut Lookup<'_>) {
         ),
     };
     lookup.report.outcomes.push(outcome);
+}
+
+/// Shared hosting. When more than [`MAX_COHOSTS`] names resolved to the address (every domain the
+/// lookup found other than its own PTR names), the address and each name are tagged
+/// `shared-hosting`, the address's evidence says how many, and each name's confidence falls to
+/// [`SHARED_HOSTING_CONFIDENCE`], below the floor a recursive scan follows. Nothing is dropped:
+/// every name stays in the report with the evidence that found it. At the cap or under it,
+/// nothing changes. **Pure.**
+fn cap_cohosts(report: &mut Report, ip: &str, scan_id: &str) {
+    let cohosts: Vec<usize> = report
+        .entities
+        .iter()
+        .enumerate()
+        .filter(|(_, entity)| entity.kind == EntityKind::Domain && !entity.has_tag(tags::PTR))
+        .map(|(index, _)| index)
+        .collect();
+    if cohosts.len() <= MAX_COHOSTS {
+        return;
+    }
+    for index in &cohosts {
+        let entity = &mut report.entities[*index];
+        entity.tag(tags::SHARED_HOSTING);
+        entity.confidence = entity.confidence.min(SHARED_HOSTING_CONFIDENCE);
+    }
+    let evidence = Evidence::new(
+        EvidenceProvenance::for_scan(FRONT_END_SOURCE, scan_id),
+        format!(
+            "{} names resolved to the address, more than {MAX_COHOSTS}: shared hosting, so no one of \
+             them links to it",
+            cohosts.len()
+        ),
+    )
+    .with_attr("cohosts", cohosts.len().to_string())
+    .with_attr("cohost_cap", MAX_COHOSTS.to_string());
+    push_entity(
+        &mut report.entities,
+        EntityKind::IpAddress,
+        ip,
+        SEED_CONFIDENCE,
+        scan_id,
+        evidence,
+        &[tags::SHARED_HOSTING],
+    );
+    merge_by_uid(&mut report.entities);
 }
 
 /// What an address's PTR records say: the address's evidence, listing every record as published,

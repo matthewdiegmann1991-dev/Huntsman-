@@ -855,3 +855,75 @@ fn past_origins_are_bounded_and_counted() {
         attr("past_origins")
     );
 }
+
+/// More names than [`MAX_COHOSTS`] resolving to one address is shared hosting: the address says
+/// how many, each name is tagged and calibrated below the floor a recursive scan follows, and
+/// nothing is dropped. At the cap, nothing changes: a name that resolved to the address is a
+/// pivot as before. The address's own PTR name is never a co-host.
+#[test]
+fn more_cohosts_than_the_cap_make_the_address_shared_hosting_and_its_names_no_pivots() {
+    fn passive_dns(count: usize) -> &'static str {
+        let records: Vec<String> = (0..count)
+            .map(|n| format!(r#"{{"query":"site{n}.example","answer":"1.1.1.1","rrtype":"a"}}"#))
+            .collect();
+        Box::leak(
+            format!(
+                r#"{{"responseCode":200,"count":{count},"data":[{}]}}"#,
+                records.join(",")
+            )
+            .into_boxed_str(),
+        )
+    }
+    for (count, shared) in [(MAX_COHOSTS, false), (MAX_COHOSTS + 1, true)] {
+        let mut transport = keyless();
+        transport
+            .routes
+            .insert(0, ("https://api.mnemonic.no/", 200, passive_dns(count)));
+        let (_, report) = printed(run(&transport, &Keys::default(), "1.1.1.1", 1));
+        let address = entity(&report, &EntityKind::IpAddress, "1.1.1.1");
+        assert_eq!(
+            address.has_tag(crate::tags::SHARED_HOSTING),
+            shared,
+            "{count} co-hosts"
+        );
+        let cohosts: Vec<&Entity> = report
+            .entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::Domain && !e.has_tag(crate::tags::PTR))
+            .collect();
+        assert_eq!(cohosts.len(), count, "every name is kept");
+        for cohost in &cohosts {
+            assert_eq!(
+                cohost.has_tag(crate::tags::SHARED_HOSTING),
+                shared,
+                "{}",
+                cohost.value
+            );
+            assert_eq!(
+                cohost.confidence < crate::gap::EXPAND_FLOOR,
+                shared,
+                "{} at {}",
+                cohost.value,
+                cohost.confidence
+            );
+        }
+        let ptr = entity(&report, &EntityKind::Domain, "one.one.one.one");
+        assert!(ptr.has_tag(crate::tags::PTR) && !ptr.has_tag(crate::tags::SHARED_HOSTING));
+        assert!((ptr.confidence - PTR_CONFIDENCE).abs() < f64::EPSILON);
+        let counted = address
+            .evidence
+            .iter()
+            .find(|e| e.attributes.contains_key("cohosts"));
+        match counted {
+            Some(record) if shared => {
+                assert_eq!(record.attributes["cohosts"], (MAX_COHOSTS + 1).to_string());
+                assert_eq!(record.provenance.source, "ip_cli");
+            }
+            Some(record) => panic!("{count} co-hosts counted as shared hosting: {record:?}"),
+            None => assert!(
+                !shared,
+                "the address must say how many names resolved to it"
+            ),
+        }
+    }
+}
