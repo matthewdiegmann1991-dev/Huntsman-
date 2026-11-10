@@ -1654,7 +1654,9 @@ use analysis::{
     investigate_response, osint_offline_response, rhinser_native_response,
 };
 use guard::{authorized, host_allowed, page_refusal, takes_post};
-pub use lookup::{SavedLookupFailure, saved_lookup_report};
+pub use lookup::{
+    SavedLookupFailure, research_mission_body, saved_lookup_report, start_research_mission,
+};
 use lookup::{lookup_response, scans_response, sensor_response};
 use page::{FAVICON_SVG, PAGE, PAGE_ID};
 pub(crate) use page::{hash_source, inline_block};

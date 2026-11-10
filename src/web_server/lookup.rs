@@ -485,15 +485,44 @@ pub(super) fn research_mission_response(
         Ok(query) => query,
         Err(message) => return json_error(400, message),
     };
-    let (kind, selector) = match crate::research_route::plan(&query.selector) {
+    match start_research_mission(scans.service(), &query.selector) {
+        Ok(record) => response(
+            202,
+            "application/json; charset=utf-8",
+            &format!("{}\n", research_mission_body(&record)),
+            false,
+        ),
+        Err(refused) => json_error(refused.status, &refused.message),
+    }
+}
+
+/// A bounded, durable autonomous research mission over one exact, supported identifier, as
+/// `POST /api/research/mission` starts it and the MCP `research_mission` tool starts it: a
+/// depth-1 passive scan through the existing scan service, started or joined, kept as an
+/// ordinary saved scan, which the Scans UI, `scans` and `scan_read` own from there. The row is
+/// the scan's as started or joined; [`research_mission_body`] is the answer both give. No
+/// request is made on this thread.
+///
+/// # Errors
+/// A term the router refuses (400); a phrase, which is a discovery seed and never a scan
+/// target (422); the service's refusal to start the scan, in its words.
+pub fn start_research_mission(
+    service: &Arc<ScanService>,
+    selector: &str,
+) -> Result<crate::scan_store::ScanRecord, super::LookupError> {
+    let refused = |status: u16, message: &str| super::LookupError {
+        status,
+        message: message.to_owned(),
+    };
+    let (kind, selector) = match crate::research_route::plan(selector) {
         Ok(crate::research_route::ResearchAction::Targeted { kind, selector }) => (kind, selector),
         Ok(crate::research_route::ResearchAction::AdaptiveWeb { .. }) => {
-            return json_error(
+            return Err(refused(
                 422,
                 "an arbitrary phrase is a discovery seed, not a verified scan target; research it first and choose a supported identifier",
-            );
+            ));
         }
-        Err(message) => return json_error(400, message),
+        Err(message) => return Err(refused(400, message)),
     };
     // No new scheduler, task database or unlimited recursion. The existing worker policy caps
     // dispatch, and all intermediate evidence is checkpointed in the saved scan store.
@@ -507,11 +536,16 @@ pub(super) fn research_mission_response(
         },
         ..ScanRequest::default()
     };
-    let record = match scans.service().start_or_join(&request) {
-        Ok(record) => record,
-        Err(failure) => return json_error(failure.status(), &failure.to_string()),
-    };
-    let body = serde_json::json!({
+    service
+        .start_or_join(&request)
+        .map_err(|failure| refused(failure.status(), &failure.to_string()))
+}
+
+/// The answer to a research mission: the scan it runs as, its status now and the mission's
+/// bounds, as `POST /api/research/mission` answers it (`202`) and the MCP tool returns it.
+#[must_use]
+pub fn research_mission_body(record: &crate::scan_store::ScanRecord) -> serde_json::Value {
+    serde_json::json!({
         "mission_id": record.id,
         "scan": record.id,
         "status": record.status.as_str(),
@@ -526,13 +560,7 @@ pub(super) fn research_mission_response(
             "public_observations_are_not_independent_fact_verification",
             "follow_up_scope_is_limited_by_existing_scan_recursion_policy"
         ]
-    });
-    response(
-        202,
-        "application/json; charset=utf-8",
-        &format!("{body}\n"),
-        false,
-    )
+    })
 }
 
 /// The saved scans: Spiderfoot's scan list, scan views, exports and state changes, answered by the

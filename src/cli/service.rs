@@ -20,7 +20,9 @@ use huntsman_recon::scan_route::{
     parse_kind,
 };
 use huntsman_recon::textnorm::one_line;
-use huntsman_recon::web_server::{LOOKUP_WAIT, saved_lookup_report};
+use huntsman_recon::web_server::{
+    LOOKUP_WAIT, research_mission_body, saved_lookup_report, start_research_mission,
+};
 use huntsman_recon::web_server::{
     LookupError, LookupQuery, LookupReport, ServeConfig, Server, resolve_serve_bind,
 };
@@ -255,6 +257,27 @@ pub(super) fn web_scan_read(
 ) -> Result<serde_json::Value, LookupError> {
     let query = kind.map(|kind| format!("type={kind}")).unwrap_or_default();
     read_view(api, &view.path(id), &query)
+}
+
+/// The MCP `research_mission` tool: the bounded, durable depth-1 passive scan of one supported
+/// identifier that `POST /api/research/mission` starts, over the same saved scans. The route
+/// answers at once and the scan runs on in `serve`; this server lives only as long as its
+/// session, so the tool waits [`LOOKUP_WAIT`] for the mission to end, as a lookup waits, and
+/// answers with the status it reached: `FINISHED` as a rule, else still running while the
+/// session lasts, which `scan_read` follows.
+pub(super) fn web_research_mission(
+    api: &ScanApi,
+    selector: &str,
+) -> Result<serde_json::Value, LookupError> {
+    let started = start_research_mission(api.service(), selector)?;
+    let record = api
+        .service()
+        .wait(&started.id, std::time::Instant::now() + LOOKUP_WAIT)
+        .map_err(|failure| LookupError {
+            status: failure.status(),
+            message: failure.to_string(),
+        })?;
+    Ok(research_mission_body(&record))
 }
 
 /// The MCP `lookup` tool on a machine that keeps saved scans, as `GET /api/lookup` runs it with
@@ -759,6 +782,57 @@ mod tests {
             read_view(&api, "/api/scans", "").map(|v| v.as_array().map_or(0, Vec::len)),
             Ok(1)
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A research mission over a supported identifier starts (or joins) a depth-1 passive scan
+    /// the saved scans list, answered as the route answers it; a phrase is refused as a
+    /// discovery seed, before any scan is kept.
+    #[test]
+    fn a_research_mission_is_a_kept_depth_one_scan_and_a_phrase_is_refused() {
+        use huntsman_recon::scan_service::{LookupOutput, ScanLookup, ScanService};
+        let dir = std::env::temp_dir().join(format!("hse-mcp-mission-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let lookup: ScanLookup = std::sync::Arc::new(|_, selector: &str, _| {
+            Ok(LookupOutput {
+                text: format!("report on {selector}"),
+                entities: Vec::new(),
+                outcomes: vec![SourceExecutionOutcome::success("dns", 0, 1)],
+            })
+        });
+        let api = huntsman_recon::scan_api::ScanApi::new(
+            ScanService::new(ScanStore::open(&dir).expect("store opens"), lookup),
+            None,
+        );
+        let started = super::web_research_mission(&api, "example.org").expect("mission starts");
+        let id = started["scan"]
+            .as_str()
+            .expect("the mission names its scan")
+            .to_owned();
+        assert_eq!(started["mission_id"], id);
+        assert_eq!(started["kind"], "domain");
+        assert_eq!(started["recursion_depth"], 1);
+        assert_eq!(started["usecase"], "passive");
+        // The tool waited for the mission, which the instant lookup ended.
+        assert_eq!(started["status"], "FINISHED", "{started}");
+        // Only a mission still under way is joined: an ended one is over, a new one starts.
+        let again = super::web_research_mission(&api, "example.org").expect("asked again");
+        assert_ne!(again["scan"], id, "{again}");
+        assert_eq!(again["status"], "FINISHED", "{again}");
+        let phrase = super::web_research_mission(&api, "some words about a person")
+            .expect_err("a phrase is a discovery seed");
+        assert_eq!(phrase.status, 422);
+        assert!(
+            phrase.message.contains("discovery seed"),
+            "{}",
+            phrase.message
+        );
+        let listed = read_view(&api, "/api/scans", "").expect("listed");
+        assert_eq!(listed.as_array().map(Vec::len), Some(2), "{listed}");
+        for row in listed.as_array().unwrap_or(&Vec::new()) {
+            assert_eq!(row["options"]["depth"], 1, "{row}");
+            assert_eq!(row["options"]["usecase"], "passive", "{row}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

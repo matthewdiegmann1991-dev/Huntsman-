@@ -19,7 +19,7 @@ pub const HELP: &str = "mcp\nServe the Model Context Protocol over standard inpu
 so an MCP client (Claude Desktop, Claude Code, Cursor and other LLM applications) can run this \
 binary as a tool. One JSON-RPC message per line in each direction; nothing else is written to \
 standard output. Tools: lookup (every typed lookup and the public news, notices, web and \
-dossier searches), people_discover and research, each running exactly as serve's JSON API runs \
+dossier searches), people_discover, research and research_mission (the bounded, durable depth-1 passive scan of one supported identifier that POST /api/research/mission starts, kept as a saved scan), each running exactly as serve's JSON API runs \
 it, with the same keys and the same public-only egress, and, on a machine that keeps saved \
 scans (any HOME), each lookup kept as a saved scan that scan_read reads back, as serve keeps \
 its own; investigate (the selectors in a text), \
@@ -82,6 +82,13 @@ impl Tools for Live {
 
     fn research(&self, query: &str) -> Result<Value, ToolError> {
         super::service::web_research(query).map_err(refusal)
+    }
+
+    fn research_mission(&self, selector: &str) -> Result<Value, ToolError> {
+        let api = self
+            .scans()
+            .map_err(|why| format!("a research mission is kept as a saved scan, and {why}"))?;
+        super::service::web_research_mission(api, selector).map_err(refusal)
     }
 
     fn investigate(&self, text: &str) -> Result<Value, ToolError> {

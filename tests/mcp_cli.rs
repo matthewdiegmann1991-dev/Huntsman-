@@ -29,10 +29,11 @@ fn mcp(args: &[&str]) -> Command {
 
 /// The tools the server lists, in order: the live lookups first, then the offline readers, then
 /// the device's own radios.
-const TOOL_NAMES: [&str; 12] = [
+const TOOL_NAMES: [&str; 13] = [
     "lookup",
     "people_discover",
     "research",
+    "research_mission",
     "investigate",
     "investigate_file",
     "analyze",
@@ -423,6 +424,75 @@ fn a_lookup_is_kept_as_a_saved_scan_the_session_reads_back() {
     let status = &answers[1]["result"]["structuredContent"]["report"];
     assert_eq!(status["status"], "FINISHED", "{status}");
     assert_eq!(status["kind"], "network", "{status}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A research mission starts a depth-1 passive scan kept on this machine, waits for it as a
+/// lookup waits, and answers with its id and status; a later session reads the finished scan.
+/// A BSSID's network lookup makes no request without `WiGLE` or `OpenCelliD` keys and finds
+/// nothing a second hop would look up, so the whole mission is held offline. A phrase is
+/// refused as a discovery seed, nothing kept.
+#[test]
+fn a_research_mission_is_started_and_followed_to_its_end() {
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mcp-mission");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let init = || {
+        vec![
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocolVersion":"2025-06-18","capabilities":{},
+                "clientInfo":{"name":"mcp_cli test","version":"1"}}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        ]
+    };
+    let mut lines = init();
+    lines.push(
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+        "name":"research_mission","arguments":{"selector":"a person's name"}}}),
+    );
+    lines.push(
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+        "name":"research_mission","arguments":{"selector":"00:1A:11:22:33:44"}}}),
+    );
+    let (answers, stderr, code) = session_in(Some(&home), &lines);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let phrase = &answers[1]["result"];
+    assert_eq!(phrase["isError"], true, "{phrase}");
+    assert!(
+        phrase["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("discovery seed"),
+        "{phrase}"
+    );
+    let started = &answers[2]["result"];
+    assert_eq!(started["isError"], false, "{started}");
+    let mission = &started["structuredContent"];
+    let id = mission["scan"].as_str().unwrap().to_owned();
+    assert_eq!(mission["mission_id"], id);
+    assert_eq!(mission["kind"], "network");
+    assert_eq!(mission["recursion_depth"], 1);
+    assert_eq!(mission["usecase"], "passive");
+    // The tool waited: the offline mission ended within the session.
+    assert_eq!(mission["status"], "FINISHED", "{mission}");
+
+    // A later session reads the finished scan, as the Scans UI would.
+    let mut lines = init();
+    lines.push(
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+        "name":"scan_read","arguments":{"id":id,"view":"status"}}}),
+    );
+    let (answers, stderr, code) = session_in(Some(&home), &lines);
+    assert_eq!(code, Some(0), "{stderr}");
+    let status = &answers[1]["result"]["structuredContent"]["report"];
+    assert_eq!(status["kind"], "network", "{status}");
+    assert_eq!(status["options"]["depth"], 1, "{status}");
+    assert_eq!(status["status"], "FINISHED", "{status}");
+    assert!(
+        status["elements"].as_u64().is_some_and(|n| n >= 1),
+        "{status}"
+    );
     let _ = std::fs::remove_dir_all(&home);
 }
 

@@ -142,6 +142,15 @@ pub trait Tools {
     /// The search's refusal or failure, in words.
     fn research(&self, query: &str) -> Result<Value, ToolError>;
 
+    /// A bounded, durable autonomous research mission over one exact, supported identifier: the
+    /// depth-1 passive scan `POST /api/research/mission` starts, kept as a saved scan, started
+    /// or joined; the answer names the scan, which `scan_read` follows.
+    ///
+    /// # Errors
+    /// A phrase (a discovery seed, never a scan target), a term the router refuses, or a
+    /// machine that keeps no saved scans, in words.
+    fn research_mission(&self, selector: &str) -> Result<Value, ToolError>;
+
     /// The actionable entities in a text, offline: no request, no key.
     ///
     /// # Errors
@@ -364,6 +373,9 @@ impl<'a, T: Tools + ?Sized> Server<'a, T> {
                 .and_then(|(name, region)| self.tools.people_discover(&name, region)),
             "research" => text_argument(arguments, "query", MAX_ARGUMENT_BYTES)
                 .and_then(|query| self.tools.research(&query)),
+            "research_mission" => refuse_unknown(arguments, &["selector"])
+                .and_then(|()| text_argument(arguments, "selector", MAX_ARGUMENT_BYTES))
+                .and_then(|selector| self.tools.research_mission(&selector)),
             "investigate" => refuse_unknown(arguments, &["text"])
                 .and_then(|()| text_argument(arguments, "text", MAX_TEXT_BYTES))
                 .and_then(|text| self.tools.investigate(&text)),
@@ -410,7 +422,9 @@ embedded metadata too) with investigate_file by its path on this machine, look t
 ones up, then analyze the set for the links between them; ble_decode reads the bytes of a \
 Bluetooth LE advertisement a scanner showed. scans_list and scan_read read, offline, the scans \
 serve and scan saved on this machine: list them, then read one's summary, elements (of one type \
-where a scan is large), correlations, log or offline analysis. radar_wifi, \
+where a scan is large), correlations, log or offline analysis; research_mission starts a \
+depth-1 passive scan of one supported identifier, kept as a saved scan, which scan_read then \
+follows. radar_wifi, \
 radar_cells and radar_track read this device's own OS-cached radio sightings through Termux:API \
 when the server runs on an Android phone; elsewhere they say why they cannot.";
 
@@ -468,6 +482,7 @@ pub fn tool_definitions() -> Vec<Value> {
         lookup_tool(),
         people_discover_tool(),
         research_tool(),
+        research_mission_tool(),
         investigate_tool(),
         investigate_file_tool(),
         analyze_tool(),
@@ -740,6 +755,48 @@ fn research_tool() -> Value {
             "additionalProperties": false,
         },
         "annotations": live_hints("Web research"),
+    })
+}
+
+/// The `research_mission` tool.
+fn research_mission_tool() -> Value {
+    json!({
+        "name": "research_mission",
+        "title": "Start a research mission",
+        "description": format!(
+            "Start a bounded, durable autonomous research mission over one exact, \
+    supported identifier (an email, handle, phone, domain, IP address, address block, AS number, \
+    BSSID or LAT,LON): a depth-1 passive scan through the saved scan service, as POST \
+    /api/research/mission starts one, kept as a saved scan. The target's own lookup runs, then \
+    one lookup of each selector it found; keyed sources run where their key is configured. It \
+    waits up to {wait} seconds for the mission to end and answers with the scan's id and its \
+    status, FINISHED as a rule; one still running then goes on while this session lasts, and \
+    ends ABORTED with it: read it with scan_read (status, then summary, elements and \
+    correlations). The same identifier asked again while it runs joins that mission. A phrase \
+    or a name is a discovery seed, not a scan target: research it first and choose a supported \
+    identifier. Needs a machine that keeps saved scans (any HOME).",
+            wait = crate::web_server::LOOKUP_WAIT.as_secs(),
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "The exact identifier to investigate.",
+                },
+            },
+            "required": ["selector"],
+            "additionalProperties": false,
+        },
+        "annotations": {
+            "title": "Start a research mission",
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+        },
     })
 }
 
@@ -1261,6 +1318,13 @@ mod tests {
             Ok(json!({ "route": "adaptive_web_search" }))
         }
 
+        fn research_mission(&self, selector: &str) -> Result<Value, ToolError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("research_mission {selector}"));
+            Ok(json!({ "mission_id": "0123456789abcdef", "status": "RUNNING" }))
+        }
+
         fn investigate(&self, text: &str) -> Result<Value, ToolError> {
             self.calls.borrow_mut().push(format!("investigate {text}"));
             Ok(json!({ "route": "investigate", "entities": [] }))
@@ -1447,6 +1511,7 @@ mod tests {
                 "lookup",
                 "people_discover",
                 "research",
+                "research_mission",
                 "investigate",
                 "investigate_file",
                 "analyze",
@@ -1462,10 +1527,11 @@ mod tests {
             let name = tool["name"].as_str().unwrap();
             assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
             assert_eq!(tool["inputSchema"]["additionalProperties"], false, "{tool}");
-            // Only a tracking sweep writes anything (to the device's own log).
+            // Only a tracking sweep (the device's own log) and a research mission (a saved
+            // scan) write anything.
             assert_eq!(
                 tool["annotations"]["readOnlyHint"],
-                name != "radar_track",
+                !matches!(name, "radar_track" | "research_mission"),
                 "{tool}"
             );
             assert_eq!(tool["annotations"]["destructiveHint"], false, "{tool}");
@@ -1487,7 +1553,12 @@ mod tests {
                 !(offline || device),
                 "{tool}"
             );
-            assert_eq!(tool["annotations"]["idempotentHint"], offline, "{tool}");
+            // A mission asked again while it runs joins it, so it is idempotent though live.
+            assert_eq!(
+                tool["annotations"]["idempotentHint"],
+                offline || name == "research_mission",
+                "{tool}"
+            );
             assert_eq!(
                 tool["description"]
                     .as_str()
@@ -1594,6 +1665,11 @@ mod tests {
         call(&tools, "research", &json!({"query":"rust termux"}));
         call(
             &tools,
+            "research_mission",
+            &json!({"selector":" example.com "}),
+        );
+        call(
+            &tools,
             "investigate",
             &json!({"text":"  mail a@example.com  "}),
         );
@@ -1631,6 +1707,7 @@ mod tests {
                 "discover Clara Ashwell Us",
                 "discover Clara Ashwell Au",
                 "research rust termux",
+                "research_mission example.com",
                 "investigate mail a@example.com",
                 "investigate_file /sdcard/DCIM/IMG_0001.jpg",
                 "analyze a@example.com,example.com",
@@ -1656,6 +1733,16 @@ mod tests {
             ),
             ("people_discover", json!({"name":"A B","region":"uk"})),
             ("research", json!({"q":"x"})),
+            ("research_mission", json!({})),
+            ("research_mission", json!({"selector":"  "})),
+            (
+                "research_mission",
+                json!({"selector":"example.com","depth":2}),
+            ),
+            (
+                "research_mission",
+                json!({"selector":"x".repeat(MAX_ARGUMENT_BYTES + 1)}),
+            ),
             ("investigate", json!({})),
             ("investigate", json!({"text":"   "})),
             ("investigate", json!({"text":"x","extra":1})),
@@ -1859,6 +1946,9 @@ mod tests {
                 unreachable!()
             }
             fn research(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn research_mission(&self, _: &str) -> Result<Value, ToolError> {
                 unreachable!()
             }
             fn investigate(&self, _: &str) -> Result<Value, ToolError> {

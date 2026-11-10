@@ -629,6 +629,7 @@ On Termux (Android, aarch64, no root) the default bind `127.0.0.1:8080` needs no
 | `lookup` | `selector`; `kind` (`auto`, `people`, `email`, `exposure`, `username`, `phone`, `domain`, `ip`, `netblock`, `asn`, `network`, `crypto`, `geocode`, `news`, `notices`, `web`, `dossier`); `detail` (`summary` or `full`) | the same lookup as `GET /api/lookup` |
 | `people_discover` | `name`; `region` (`au`, `us`, `ae`) | the same discovery as `POST /api/people/discover` |
 | `research` | `query` | the same adaptive search as `query --adaptive` |
+| `research_mission` | `selector` | the same bounded, durable depth-1 passive scan of one supported identifier as `POST /api/research/mission`, kept as a saved scan; the tool waits up to 150 seconds for it to end and answers with its id and status (one still running goes on while the session lasts and ends `ABORTED` with it); a phrase is refused as a discovery seed |
 | `investigate` | `text` | the same offline selector extraction as `POST /api/investigate` and `investigate TEXT...`: no request, no key |
 | `investigate_file` | `path` | the same offline read of one local file as `investigate --file FILE`, by its path on the machine the server runs on: a text file for its selectors and embedded metadata, a photo, PDF or document for its embedded metadata; a symlink is refused, the file is never modified; no request, no key |
 | `analyze` | `seeds` (1 to 16) | the same offline multi-hop analysis as `GET /api/analyze` and `plan`: no request, no key |
