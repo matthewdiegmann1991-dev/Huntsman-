@@ -706,8 +706,9 @@ fn unreadable_rows_block_a_clean_zero() {
     // A subject the EU file names only on a short row is not cleared either.
     let short_eu = format!("{EU_CSV}07/11/2026;999;EU.1.1;P;SYR;;;Jane Doe\r\n");
     let parsed = parse_eu(&short_eu, &crate::textnorm::name_tokens("Jane Doe"));
+    // The short row is not a subject read: it is counted among the unreadable rows alone.
     assert_eq!(
         (parsed.listings.len(), parsed.read, parsed.unreadable),
-        (0, 3, 1)
+        (0, 2, 1)
     );
 }
