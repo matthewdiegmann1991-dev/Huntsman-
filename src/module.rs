@@ -386,7 +386,7 @@ const REACHABLE_MODULES: &[ReachableModule] = &[
         network: true,
         category: ModuleCategory::Threat,
         attack_techniques: &["T1593"],
-        description: "OFAC SDN, UN Security Council and EU sanctions listings that name every word of the person's name, matched on the device",
+        description: "OFAC SDN, UN Security Council, EU and DFAT (Australian) sanctions listings that name every word of the person's name, matched on the device",
     },
     ReachableModule {
         name: "icij_offshore",

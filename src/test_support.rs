@@ -52,6 +52,8 @@ impl Transport for ScriptedTransport {
 /// no route matches gets no response.
 pub struct RoutedTransport {
     pub routes: Vec<(&'static str, u16, &'static str)>,
+    /// Routes whose body is bytes (a workbook, an archive), asked before the text routes.
+    pub bytes: Vec<(String, u16, Vec<u8>)>,
     pub seen: std::sync::Mutex<Vec<String>>,
 }
 
@@ -60,8 +62,17 @@ impl RoutedTransport {
     pub fn new(routes: &[(&'static str, u16, &'static str)]) -> Self {
         Self {
             routes: routes.to_vec(),
+            bytes: Vec::new(),
             seen: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// This transport, also answering every URL starting with `prefix` with `status` and the
+    /// bytes `body`.
+    #[must_use]
+    pub fn with_bytes(mut self, prefix: &str, status: u16, body: Vec<u8>) -> Self {
+        self.bytes.push((prefix.to_owned(), status, body));
+        self
     }
 
     /// Every URL asked, in order.
@@ -78,6 +89,18 @@ impl Transport for RoutedTransport {
     fn send(&self, request: &Request) -> Result<Response, TransportFailure> {
         if let Ok(mut seen) = self.seen.lock() {
             seen.push(request.url.clone());
+        }
+        if let Some((_, status, body)) = self
+            .bytes
+            .iter()
+            .find(|(prefix, _, _)| request.url.starts_with(prefix.as_str()))
+        {
+            return Ok(Response {
+                status: *status,
+                headers: Vec::new(),
+                body: body.clone(),
+                truncated: false,
+            });
         }
         self.routes
             .iter()

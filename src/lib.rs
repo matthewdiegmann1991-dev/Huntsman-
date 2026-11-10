@@ -325,6 +325,7 @@ pub mod wigle;
 pub mod wikidata;
 pub mod wikidata_cli;
 pub mod wikipedia;
+pub mod workbook;
 pub mod x509;
 pub mod xlsx;
 pub mod xposedornot;
@@ -342,3 +343,4 @@ pub use stage::{EvidenceLevel, Status};
 pub mod opencellid;
 #[cfg(test)]
 mod test_support;
+pub mod zip_read;

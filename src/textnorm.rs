@@ -289,6 +289,88 @@ pub fn name_tokens(full: &str) -> Vec<String> {
         .collect()
 }
 
+/// The text of every `<tag>…</tag>` in `block`, unescaped, in order; an element with attributes
+/// is not matched. **Pure.**
+#[must_use]
+pub fn xml_tag_values(block: &str, tag: &str) -> Vec<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut values = Vec::new();
+    let mut rest = block;
+    while let Some(start) = rest.find(&open) {
+        let after = &rest[start + open.len()..];
+        let Some(end) = after.find(&close) else {
+            break;
+        };
+        let value = xml_unescape(after[..end].trim());
+        if !value.is_empty() {
+            values.push(value);
+        }
+        rest = &after[end + close.len()..];
+    }
+    values
+}
+
+/// XML's five named entities and decimal or hexadecimal character references. **Pure.**
+#[must_use]
+pub fn xml_unescape(text: &str) -> String {
+    if !text.contains('&') {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let Some(end) = tail.find(';').filter(|end| *end <= 10) else {
+            out.push('&');
+            rest = &tail[1..];
+            continue;
+        };
+        let entity = &tail[1..end];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                .or_else(|| entity.strip_prefix('#').and_then(|dec| dec.parse().ok()))
+                .and_then(char::from_u32),
+        };
+        if let Some(c) = decoded {
+            out.push(c);
+            rest = &tail[end + 1..];
+        } else {
+            out.push('&');
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The `<element>…</element>` blocks of `xml`, in order; an element with attributes is not
+/// matched. **Pure.**
+#[must_use]
+pub fn xml_blocks<'a>(xml: &'a str, element: &str) -> Vec<&'a str> {
+    let open = format!("<{element}>");
+    let close = format!("</{element}>");
+    let mut found = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find(&open) {
+        let after = &rest[start + open.len()..];
+        let Some(end) = after.find(&close) else {
+            break;
+        };
+        found.push(&after[..end]);
+        rest = &after[end + close.len()..];
+    }
+    found
+}
+
 /// `value` trimmed, or `None` when it is absent or blank. **Pure.**
 #[must_use]
 #[inline]

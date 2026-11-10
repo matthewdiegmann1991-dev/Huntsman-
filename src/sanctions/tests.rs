@@ -25,14 +25,122 @@ const EU_CSV: &str = "\u{feff}fileGenerationDate;Entity_LogicalId;Entity_EU_Refe
 07/11/2026;7200;EU.3606.65;P;COD;;;Eric BADEGE;1971-01-01;Democratic Republic of the Congo\r\n\
 07/11/2026;110142;EU.3843.7;P;SYR;;;Mohammed Zahir KHARBOUTLI;;Syria\r\n";
 
+/// The address DFAT's page links its workbook under, as a site-relative path.
+const DFAT_XLSX_PATH: &str = "/sites/default/files/regulation8_consolidated.xlsx";
+/// The DFAT page, shaped as a site page: the workbook's link among others, site-relative.
+const DFAT_HTML: &str = "<!DOCTYPE html><html><body><a href=\"/about-us/\">About</a>\
+<a href=\"/sites/default/files/sanctions-guide.pdf\">Guide</a>\
+<a href=\"/sites/default/files/regulation8_consolidated.xlsx?v=3\">Consolidated List (XLSX)</a>\
+</body></html>";
+
+/// DFAT's workbook as the publisher laid it out on 2026-11-10 (its columns, its name types, an
+/// alias row's reference being the primary's with a letter), behind two title rows: Kim Jong
+/// Un's three rows (a primary name, an alias, the name in its original script) are one
+/// listing, the entity another.
+fn dfat_workbook() -> Vec<u8> {
+    let header = [
+        "Reference",
+        "Name of Individual or Entity",
+        "Type",
+        "Name Type",
+        "Alias Strength",
+        "Date of Birth",
+        "Place of Birth",
+        "Citizenship",
+        "Address",
+        "Additional Information",
+        "Listing Information",
+        "IMO Number",
+        "Committees",
+    ];
+    let row = |cells: [&str; 13]| cells.iter().map(|c| (*c).to_owned()).collect::<Vec<_>>();
+    crate::xlsx::workbook(&[crate::xlsx::Sheet {
+        name: "Consolidated List".into(),
+        rows: vec![
+            vec!["Consolidated List".into()],
+            vec![String::new()],
+            header.iter().map(|c| (*c).to_owned()).collect(),
+            row([
+                "6219",
+                "KIM Jong Un",
+                "Individual",
+                "Primary Name",
+                "22",
+                "08/01/1984",
+                "Pyongyang",
+                "DPRK",
+                "",
+                "Chairman of the State Affairs Commission",
+                "Autonomous (DPRK) 2017",
+                "",
+                "1718",
+            ]),
+            row([
+                "6219a",
+                "KIM Jong-eun",
+                "Individual",
+                "Alias",
+                "Strong",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]),
+            row([
+                "6219b",
+                "\u{AE40}\u{C815}\u{C740}",
+                "Individual",
+                "Original Script",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]),
+            row([
+                "3101",
+                "BANCO NACIONAL DE CUBA",
+                "Entity",
+                "Primary Name",
+                "",
+                "",
+                "",
+                "",
+                "Havana, Cuba",
+                "",
+                "",
+                "",
+                "",
+            ]),
+        ],
+    }])
+}
+
+fn dfat_routes(transport: RoutedTransport) -> RoutedTransport {
+    transport.with_bytes(
+        &format!("https://www.dfat.gov.au{DFAT_XLSX_PATH}"),
+        200,
+        dfat_workbook(),
+    )
+}
+
 fn lists() -> Lists {
     Lists::new(
-        Box::new(RoutedTransport::new(&[
+        Box::new(dfat_routes(RoutedTransport::new(&[
             (OFAC_SDN.url, 200, SDN),
             (OFAC_ALT.url, 200, ALT),
             (UN_SC.url, 200, UN_XML),
             (EU_FSF.url, 200, EU_CSV),
-        ])),
+            (DFAT_PAGE, 200, DFAT_HTML),
+        ]))),
         None,
     )
 }
@@ -46,7 +154,10 @@ fn a_listing_matches_only_when_it_carries_every_word_of_the_name() {
     let (entities, outcomes) = check(&lists(), "Kim Jong Un", "scan", 1);
     assert_eq!(
         values(&entities),
-        ["https://sanctionssearch.ofac.treas.gov/Details.aspx?id=20157"]
+        [
+            "https://sanctionssearch.ofac.treas.gov/Details.aspx?id=20157",
+            "https://www.dfat.gov.au/international-relations/security/sanctions/consolidated-list#6219",
+        ]
     );
     assert_eq!(entities[0].kind, EntityKind::Document);
     let evidence = &entities[0].evidence[0];
@@ -55,7 +166,7 @@ fn a_listing_matches_only_when_it_carries_every_word_of_the_name() {
         Some("DPRK3")
     );
     assert!(evidence.attributes["remarks"].contains("DOB 08 Jan 1984"));
-    assert_eq!(outcomes.len(), 3);
+    assert_eq!(outcomes.len(), 4);
     assert_eq!(outcomes[0].module, OFAC);
     assert_eq!(outcomes[0].kind, SourceOutcomeKind::Success);
     assert_eq!(outcomes[1].module, UN);
@@ -121,7 +232,7 @@ fn no_lists_consults_nothing_and_a_failed_download_is_never_a_clean_zero() {
     let silent = Lists::new(Box::new(RoutedTransport::new(&[])), None);
     let (entities, outcomes) = check(&silent, "Kim Jong Un", "scan", 1);
     assert!(entities.is_empty());
-    assert_eq!(outcomes.len(), 3);
+    assert_eq!(outcomes.len(), 4);
     for outcome in outcomes {
         assert_ne!(outcome.kind, SourceOutcomeKind::ValidZero, "{outcome:?}");
         assert_ne!(outcome.kind, SourceOutcomeKind::Success, "{outcome:?}");
@@ -187,16 +298,23 @@ fn a_failed_refresh_preserves_historical_matches_without_current_clearance() {
     std::fs::create_dir_all(&dir).expect("test cache directory");
     let start = crate::clock::unix_now();
     let first = Lists::new(
-        Box::new(RoutedTransport::new(&[
+        Box::new(dfat_routes(RoutedTransport::new(&[
             (OFAC_SDN.url, 200, SDN),
             (OFAC_ALT.url, 200, ALT),
             (UN_SC.url, 200, UN_XML),
-        ])),
+            (DFAT_PAGE, 200, DFAT_HTML),
+        ]))),
         Some(dir.clone()),
     );
     let (_, initial) = check(&first, "Kim Jong Un", "scan", start);
     assert_eq!(initial[0].kind, SourceOutcomeKind::Success);
     assert_eq!(initial[1].kind, SourceOutcomeKind::ValidZero);
+    assert_eq!(
+        initial[3].kind,
+        SourceOutcomeKind::Success,
+        "{:?}",
+        initial[3]
+    );
 
     // Twenty-five hours later, every publisher is unreachable. The last valid copies
     // are still read, including the historical positive, but neither list is current.
@@ -204,9 +322,20 @@ fn a_failed_refresh_preserves_historical_matches_without_current_clearance() {
     let (previous, outcomes) = check(&offline, "Kim Jong Un", "scan", start + MAX_AGE + 1);
     assert_eq!(
         values(&previous),
-        ["https://sanctionssearch.ofac.treas.gov/Details.aspx?id=20157"]
+        [
+            "https://sanctionssearch.ofac.treas.gov/Details.aspx?id=20157",
+            "https://www.dfat.gov.au/international-relations/security/sanctions/consolidated-list#6219",
+        ]
     );
-    assert_eq!(outcomes.len(), 3);
+    assert_eq!(outcomes.len(), 4);
+    // The DFAT page is unreachable too, so its kept workbook answers, not current.
+    assert_eq!(
+        outcomes[3].kind,
+        SourceOutcomeKind::Inconclusive,
+        "{:?}",
+        outcomes[3]
+    );
+    assert_eq!(outcomes[3].found, Some(1));
     for outcome in &outcomes[..2] {
         assert_eq!(outcome.kind, SourceOutcomeKind::Inconclusive, "{outcome:?}");
         assert!(
@@ -244,4 +373,171 @@ fn missing_ofac_aliases_cannot_prove_absence() {
             .contains("aliases unavailable")
     );
     assert_eq!(outcomes[1].kind, SourceOutcomeKind::ValidZero);
+}
+
+/// DFAT's list: the workbook's link is read from the page (site-relative, with a query), the
+/// title rows above the header are skipped, a listing's rows are grouped by reference with the
+/// primary name first and its fields kept, an alias matches, and an entity is a listing too.
+#[test]
+fn the_dfat_list_is_read_from_the_workbook_the_page_links() {
+    // "Jong-eun" is only the alias's spelling: the primary name does not carry that word.
+    let (entities, outcomes) = check(&lists(), "Jong-eun Kim", "scan", 1);
+    let dfat: Vec<&Entity> = entities
+        .iter()
+        .filter(|entity| entity.raw_value.contains("dfat.gov.au"))
+        .collect();
+    assert_eq!(dfat.len(), 1, "{:?}", values(&entities));
+    let evidence = &dfat[0].evidence[0];
+    assert_eq!(
+        evidence.attributes.get("matched_name").map(String::as_str),
+        Some("KIM Jong-eun")
+    );
+    let aliases = evidence.attributes.get("alias").map_or("", String::as_str);
+    assert!(aliases.contains("KIM Jong-eun"), "{aliases}");
+    assert!(aliases.contains("\u{AE40}\u{C815}\u{C740}"), "{aliases}");
+    assert_eq!(
+        evidence.attributes.get("reference").map(String::as_str),
+        Some("6219")
+    );
+    assert_eq!(
+        evidence
+            .attributes
+            .get("alias_strength")
+            .map(String::as_str),
+        Some("22")
+    );
+    assert_eq!(
+        evidence.attributes.get("committees").map(String::as_str),
+        Some("1718")
+    );
+    assert_eq!(
+        evidence.attributes.get("date_of_birth").map(String::as_str),
+        Some("08/01/1984")
+    );
+    assert_eq!(
+        evidence
+            .attributes
+            .get("listing_information")
+            .map(String::as_str),
+        Some("Autonomous (DPRK) 2017")
+    );
+    assert_eq!(
+        evidence.attributes.get("type").map(String::as_str),
+        Some("Individual")
+    );
+    assert_eq!(
+        evidence.attributes.get("dataset").map(String::as_str),
+        Some("DFAT Consolidated List (Australian sanctions)")
+    );
+    let dfat_outcome = outcomes
+        .iter()
+        .find(|o| o.module == DFAT)
+        .expect("a DFAT outcome");
+    assert_eq!(dfat_outcome.kind, SourceOutcomeKind::Success);
+    assert_eq!(dfat_outcome.found, Some(1));
+    assert!(
+        dfat_outcome
+            .detail
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("2 listings read"),
+        "{dfat_outcome:?}"
+    );
+
+    let (entities, _) = check(&lists(), "Banco Nacional de Cuba", "scan", 1);
+    assert!(
+        values(&entities).iter().any(|v| v.ends_with("#3101")),
+        "{:?}",
+        values(&entities)
+    );
+}
+
+/// A page without the workbook's link, or a workbook without the name column, is a drifted
+/// list, reported as such, never a clean zero; the other lists are unaffected.
+#[test]
+fn a_dfat_page_or_workbook_that_drifted_is_reported_not_read_as_clear() {
+    let no_link = Lists::new(
+        Box::new(RoutedTransport::new(&[
+            (OFAC_SDN.url, 200, SDN),
+            (OFAC_ALT.url, 200, ALT),
+            (UN_SC.url, 200, UN_XML),
+            (EU_FSF.url, 200, EU_CSV),
+            (
+                DFAT_PAGE,
+                200,
+                "<html><a href=\"/sites/default/files/other.xlsx\">x</a></html>",
+            ),
+        ])),
+        None,
+    );
+    let (entities, outcomes) = check(&no_link, "Kim Jong Un", "scan", 1);
+    assert_eq!(values(&entities).len(), 1, "{:?}", values(&entities));
+    assert_eq!(outcomes[3].module, DFAT);
+    assert_eq!(
+        outcomes[3].kind,
+        SourceOutcomeKind::ProtocolDrift,
+        "{:?}",
+        outcomes[3]
+    );
+    assert!(
+        outcomes[3]
+            .detail
+            .as_deref()
+            .unwrap_or("")
+            .contains("links no consolidated-list workbook"),
+        "{:?}",
+        outcomes[3]
+    );
+
+    let renamed = crate::xlsx::workbook(&[crate::xlsx::Sheet {
+        name: "List".into(),
+        rows: vec![
+            vec!["Reference".into(), "Name".into()],
+            vec!["1".into(), "KIM Jong Un".into()],
+        ],
+    }]);
+    let drifted = Lists::new(
+        Box::new(
+            RoutedTransport::new(&[(DFAT_PAGE, 200, DFAT_HTML)]).with_bytes(
+                &format!("https://www.dfat.gov.au{DFAT_XLSX_PATH}"),
+                200,
+                renamed,
+            ),
+        ),
+        None,
+    );
+    let (_, outcomes) = check(&drifted, "Kim Jong Un", "scan", 1);
+    assert_eq!(
+        outcomes[3].kind,
+        SourceOutcomeKind::ProtocolDrift,
+        "{:?}",
+        outcomes[3]
+    );
+    assert!(
+        outcomes[3]
+            .detail
+            .as_deref()
+            .unwrap_or("")
+            .contains("no listing could be read in 2 rows"),
+        "{:?}",
+        outcomes[3]
+    );
+}
+
+#[test]
+fn the_workbook_link_is_the_first_consolidated_xlsx_made_absolute() {
+    assert_eq!(
+        workbook_link(DFAT_HTML).as_deref(),
+        Some("https://www.dfat.gov.au/sites/default/files/regulation8_consolidated.xlsx?v=3")
+    );
+    assert_eq!(
+        workbook_link("<a href='https://cdn.example/Consolidated_List.XLSX#top'>").as_deref(),
+        Some("https://cdn.example/Consolidated_List.XLSX#top")
+    );
+    assert_eq!(
+        workbook_link("<a href=\"//www.dfat.gov.au/files/consolidated.xlsx\">").as_deref(),
+        Some("https://www.dfat.gov.au/files/consolidated.xlsx")
+    );
+    assert_eq!(workbook_link("<a href=\"/files/consolidated.csv\">"), None);
+    assert_eq!(workbook_link("<a href=\"/files/other.xlsx\">"), None);
 }
