@@ -1,0 +1,1 @@
+- `radar survey-bluetooth` names each record's service UUIDs from the embedded Bluetooth SIG list (`service_names`, in the record's own order), and the `scan` synopsis now shows the `--json` the typed scan route has always taken.

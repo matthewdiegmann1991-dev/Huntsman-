@@ -151,7 +151,7 @@ registry! {
     name: "radar", summary: "Read rootless Termux:API OS-cached WiFi/cells, import offline radio CSV, or track sweeps",
     synopsis: "radar wifi|cells [--json] [--file TERMUX_SCAN_JSON] | radar ble-adv [--address ADDR] [--raw] [--json] HEX... | radar survey-lte|survey-nr|survey-wifi|survey-bluetooth --file NETWORK_SURVEY_CSV [--json] | radar track [--json] [--wifi-file FILE] [--cells-file FILE] [--log FILE]", run: super::radar::radar_cmd;
     name: "scan", summary: "Route one selector or bounded seed-list into rebuilt lookup front-ends",
-    synopsis: "scan SELECTOR [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save FILE] | scan --input-file FILE [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save-dir DIR] | scan --recurse SELECTOR... [--max-generations N] [--expand-floor F] [--json]", run: super::lookup::scan_cmd;
+    synopsis: "scan SELECTOR [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save FILE] [--json] | scan --input-file FILE [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save-dir DIR] | scan --recurse SELECTOR... [--max-generations N] [--expand-floor F] [--json]", run: super::lookup::scan_cmd;
     name: "investigate", summary: "Extract actionable entities from local text or one bounded file",
     synopsis: "investigate TEXT... [--json]|--file FILE [--json]", run: super::lookup::investigate_cmd;
     name: "plan", summary: "Plan an offline investigation from seeds; save or reload it as a session",
