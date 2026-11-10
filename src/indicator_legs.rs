@@ -56,6 +56,9 @@ pub const SOURCES: &[Source] = &[
 const SEED_CONFIDENCE: f64 = 0.90;
 /// Confidence of an indicator a provider ties to it.
 const PIVOT_CONFIDENCE: f64 = 0.60;
+/// An incidental pivot: a provider named it beside the indicator without linking it. Below
+/// [`crate::gap::EXPAND_FLOOR`], so a recursive scan never follows it; kept with its evidence.
+pub const INCIDENTAL_CONFIDENCE: f64 = 0.40;
 
 /// One source's answer: what it found, nothing, or why it could not say.
 type Answer = Result<Option<Finding>, crate::api_leg::LegError>;
@@ -201,19 +204,15 @@ fn fold(
         let evidence = Evidence::new(EvidenceProvenance::for_scan(source, scan_id), pivot.summary)
             .with_attr(seed_attr, indicator.value());
         // A position is geographic intelligence, as the `network` lookup tags its positions.
-        let pivot_tags: &[&str] = if kind == EntityKind::Coordinates {
-            &[tags::GEOINT]
+        let (confidence, pivot_tags): (f64, &[&str]) = if pivot.incidental {
+            (INCIDENTAL_CONFIDENCE, &[tags::INCIDENTAL])
+        } else if kind == EntityKind::Coordinates {
+            (PIVOT_CONFIDENCE, &[tags::GEOINT])
         } else {
-            &[]
+            (PIVOT_CONFIDENCE, &[])
         };
         push_entity(
-            entities,
-            kind,
-            &value,
-            PIVOT_CONFIDENCE,
-            scan_id,
-            evidence,
-            pivot_tags,
+            entities, kind, &value, confidence, scan_id, evidence, pivot_tags,
         );
         count += 1;
     }
@@ -617,5 +616,48 @@ mod tests {
         );
         assert_eq!(count, 5);
         assert!(entities[0].tags.iter().any(|t| t == "malicious"));
+    }
+
+    /// A pivot a provider names without linking it stays in the report, tagged and below the
+    /// floor a recursive scan follows; the first reading of a value wins, so a linked pivot is
+    /// never weakened by an incidental one of the same value that follows it.
+    #[test]
+    fn an_incidental_pivot_stays_below_the_floor_and_says_so() {
+        let finding = Finding::new("s")
+            .pivot(PivotKind::Domain, "on.example", "a page on the indicator")
+            .incidental_pivot(
+                PivotKind::Domain,
+                "bystander.example",
+                "a page that involved it",
+            )
+            .incidental_pivot(PivotKind::Domain, "on.example", "a weaker reading, dropped");
+        let mut entities = Vec::new();
+        fold(&mut entities, Indicator::Ip("1.1.1.1"), "s", "x", finding);
+        let by_value = |value: &str| {
+            entities
+                .iter()
+                .find(|entity| entity.value == value)
+                .unwrap_or_else(|| panic!("no entity {value}"))
+        };
+        let on = by_value("on.example");
+        assert!((on.confidence - PIVOT_CONFIDENCE).abs() < f64::EPSILON);
+        assert!(!on.has_tag(crate::tags::INCIDENTAL), "{:?}", on.tags);
+        let bystander = by_value("bystander.example");
+        assert!(
+            bystander.confidence < crate::gap::EXPAND_FLOOR,
+            "{}",
+            bystander.confidence
+        );
+        assert!((bystander.confidence - INCIDENTAL_CONFIDENCE).abs() < f64::EPSILON);
+        assert!(
+            bystander.has_tag(crate::tags::INCIDENTAL),
+            "{:?}",
+            bystander.tags
+        );
+        assert_eq!(
+            entities.iter().filter(|e| e.value == "on.example").count(),
+            1,
+            "the weaker reading of a known value is dropped"
+        );
     }
 }

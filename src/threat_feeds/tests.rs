@@ -1286,3 +1286,72 @@ fn all_download_responses_keep_original_bytes_and_legacy_copies() {
     );
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
+
+/// A listing marks a name the lookup found, with its evidence and tag, but never raises that
+/// name's confidence: the feed vouches for the listing, not for the name's link to the subject.
+/// The subject itself, seeded at its own confidence, is unchanged too. Before, a listing joined
+/// the report at the listing's own 0.90 and the merge kept the maximum, so a co-hosted name or a
+/// page that merely involved the subject ranked beside the subject the moment a feed named it.
+#[test]
+fn a_listing_marks_a_found_name_without_raising_its_confidence() {
+    let net = Net::serving();
+    let feeds = Feeds::new(Box::new(Shared(Arc::clone(&net))), None);
+    let mut entities = vec![
+        Entity::new(EntityKind::IpAddress, "198.51.100.20", 0.90, "s"),
+        Entity::new(EntityKind::Domain, "evil.example", 0.60, "s"),
+        Entity::new(EntityKind::Domain, "ads.example", 0.55, "s"),
+    ];
+    let mut outcomes = Vec::new();
+    check_found(
+        &feeds,
+        address("198.51.100.20"),
+        &mut entities,
+        &mut outcomes,
+        "s",
+        now(),
+    );
+    crate::entity::merge_by_uid(&mut entities);
+    let by_value = |value: &str| {
+        entities
+            .iter()
+            .find(|entity| entity.value == value)
+            .unwrap_or_else(|| panic!("no entity {value}"))
+    };
+    let evil = by_value("evil.example");
+    assert!(
+        (evil.confidence - 0.60).abs() < f64::EPSILON,
+        "{}",
+        evil.confidence
+    );
+    assert!(evil.has_tag(tags::MALICIOUS), "{:?}", evil.tags);
+    assert!(
+        evil.evidence
+            .iter()
+            .any(|e| e.summary.contains("is listed by")),
+        "the listing's evidence joins the found name"
+    );
+    let ads = by_value("ads.example");
+    assert!(
+        (ads.confidence - 0.55).abs() < f64::EPSILON,
+        "{}",
+        ads.confidence
+    );
+    assert!(
+        ads.evidence
+            .iter()
+            .any(|e| e.summary.contains("is listed by"))
+    );
+    let subject = by_value("198.51.100.20");
+    assert!((subject.confidence - 0.90).abs() < f64::EPSILON);
+    assert!(
+        subject
+            .evidence
+            .iter()
+            .any(|e| e.summary.contains("is listed by"))
+    );
+    assert_eq!(
+        entities.len(),
+        3,
+        "listings merge into the found entities: {entities:?}"
+    );
+}

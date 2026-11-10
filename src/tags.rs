@@ -23,6 +23,10 @@ pub const LOOKALIKE: &str = "lookalike";
 /// lookup is about. The address and each such name carry this tag, and the names sit below the
 /// floor a recursive scan follows, so a crawl never pivots through them.
 pub const SHARED_HOSTING: &str = "shared-hosting";
+/// A provider named the entity beside the subject without linking it: a page that loaded a
+/// resource from the subject, a site that redirected into it. It stays in the report with its
+/// evidence, below the floor a recursive scan follows.
+pub const INCIDENTAL: &str = "incidental";
 /// The address is announced by an Australian consumer internet provider's AS (Telstra, Optus,
 /// TPG, …): the operator's market, not proof that the address is a home connection.
 pub const AU_CONSUMER_ISP: &str = "au-consumer-isp";
