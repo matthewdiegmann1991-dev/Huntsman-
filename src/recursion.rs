@@ -284,6 +284,13 @@ fn expansions(entity: &Entity, policy: &RecursionPolicy) -> Vec<Target> {
     if entity.has_tag(crate::tags::NAME_SEARCH_LEAD) || entity.has_tag("wikidata-name-lead") {
         return Vec::new();
     }
+    // An exchange-point peering address is the subject's own router interface on an IXP
+    // fabric: looking it up finds the exchange and the subject's AS again, never anything new,
+    // and one AS can list hundreds, enough to spend a crawl's whole budget on them. Like a role
+    // mailbox, it stays in the graph and the report but is not dispatched.
+    if entity.kind == EntityKind::IpAddress && entity.has_tag(crate::tags::PEERING_ADDRESS) {
+        return Vec::new();
+    }
     if entity.confidence < policy.expand_confidence_floor {
         return Vec::new();
     }
@@ -2233,6 +2240,47 @@ mod tests {
                 .entities
                 .iter()
                 .any(|e| e.kind == EntityKind::Username && e.value == "weak")
+        );
+    }
+
+    #[test]
+    fn peering_addresses_are_kept_but_never_dispatched() {
+        // An AS lookup names its exchange-point peering addresses beside an address that is a
+        // real pivot; both are well above the floor.
+        let mut peering = ent(EntityKind::IpAddress, "8.8.4.4", 0.8);
+        peering.tag(crate::tags::PEERING_ADDRESS);
+        let mut collector = Scripted::new().on(
+            ScanKind::Asn,
+            "AS15169",
+            vec![peering, ent(EntityKind::IpAddress, "8.8.8.8", 0.8)],
+        );
+        let policy = RecursionPolicy {
+            expand_confidence_floor: 0.0,
+            ..RecursionPolicy::default()
+        };
+        let report = run(&["AS15169".to_owned()], &policy, &mut collector);
+        assert_eq!(report.rejected_seeds, Vec::<String>::new());
+        assert!(
+            collector
+                .calls
+                .contains(&("ip".to_owned(), "8.8.8.8".to_owned())),
+            "{:?}",
+            collector.calls
+        );
+        assert!(
+            !collector
+                .calls
+                .iter()
+                .any(|(_, selector)| selector == "8.8.4.4"),
+            "a peering address is never dispatched, even with no floor: {:?}",
+            collector.calls
+        );
+        assert!(
+            report
+                .entities
+                .iter()
+                .any(|e| e.kind == EntityKind::IpAddress && e.value == "8.8.4.4"),
+            "the peering address stays in the report"
         );
     }
 

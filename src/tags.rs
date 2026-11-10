@@ -27,6 +27,12 @@ pub const SHARED_HOSTING: &str = "shared-hosting";
 /// resource from the subject, a site that redirected into it. It stays in the report with its
 /// evidence, below the floor a recursive scan follows.
 pub const INCIDENTAL: &str = "incidental";
+/// An address the subject peers from on an exchange-point fabric, as `PeeringDB` lists it: the
+/// subject's own router interface, not a host anyone else uses. It stays in the report with its
+/// evidence, but a recursive scan never looks it up: the lookup would find the exchange and the
+/// subject's AS again, never anything new, and one AS can have hundreds of them. The value
+/// predates this constant and is kept for saved scans.
+pub const PEERING_ADDRESS: &str = "peeringdb-peering-ip";
 /// The address is announced by an Australian consumer internet provider's AS (Telstra, Optus,
 /// TPG, …): the operator's market, not proof that the address is a home connection.
 pub const AU_CONSUMER_ISP: &str = "au-consumer-isp";

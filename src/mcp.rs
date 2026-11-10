@@ -389,8 +389,9 @@ fn lookup_tool() -> Value {
                     "enum": ["summary", "full"],
                     "default": "summary",
                     "description": "summary: every source outcome, entity counts by kind \
-    and the most confident entities with their evidence, sized for a model to read. full: the \
-    complete report, which can be megabytes.",
+    and the most confident entities of every kind with their evidence (one kind at a time in \
+    rounds, so a kind with hundreds of values cannot hide the others), sized for a model to \
+    read. full: the complete report, which can be megabytes.",
                 },
             },
             "required": ["selector"],
@@ -610,9 +611,12 @@ fn lookup_arguments(arguments: &Map<String, Value>) -> Result<(String, String, b
 }
 
 /// A lookup report cut to what a model can read: every source outcome, how many entities of each
-/// kind were found, and the most confident entities with their evidence, within
-/// [`SUMMARY_ENTITY_BYTES`]. The rendered text and the synergy body are left out (their size is
-/// counted); every cut is reported, and `detail: full` returns the report whole. **Pure.**
+/// kind were found, and the most confident entities of every kind with their evidence, within
+/// [`SUMMARY_ENTITY_BYTES`]. Entities are shown one kind at a time in rounds, so a kind with
+/// hundreds of confident values (an AS's netblocks, a site's addresses) cannot crowd every other
+/// kind out of the budget: the first round is the best entity of each kind. The rendered text and
+/// the synergy body are left out (their size is counted); every cut is reported, and
+/// `detail: full` returns the report whole. **Pure.**
 #[must_use]
 pub fn summarize_lookup(report: &Value) -> Value {
     let entities = report
@@ -636,16 +640,41 @@ pub fn summarize_lookup(report: &Value) -> Value {
             .total_cmp(&score(a, "confidence"))
             .then(score(b, "corroboration").total_cmp(&score(a, "corroboration")))
     });
+    // One lane per kind, lanes in the order their best entity ranks, each lane in rank order.
+    let mut lanes: Vec<Vec<&Value>> = Vec::new();
+    let mut lane_of = std::collections::BTreeMap::<&str, usize>::new();
+    for entity in ranked {
+        let kind = entity
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let lane = *lane_of.entry(kind).or_insert_with(|| {
+            lanes.push(Vec::new());
+            lanes.len() - 1
+        });
+        lanes[lane].push(entity);
+    }
+    // Rounds across the lanes, until the budget is spent or every lane is empty.
     let mut shown = Vec::new();
     let mut used = 0;
-    for entity in ranked {
-        let compact = compact_entity(entity);
-        let size = serde_json::to_string(&compact).map_or(usize::MAX, |text| text.len());
-        if used + size > SUMMARY_ENTITY_BYTES {
+    'rounds: for round in 0.. {
+        let mut any = false;
+        for lane in &lanes {
+            let Some(entity) = lane.get(round) else {
+                continue;
+            };
+            any = true;
+            let compact = compact_entity(entity);
+            let size = serde_json::to_string(&compact).map_or(usize::MAX, |text| text.len());
+            if used + size > SUMMARY_ENTITY_BYTES {
+                break 'rounds;
+            }
+            used += size;
+            shown.push(compact);
+        }
+        if !any {
             break;
         }
-        used += size;
-        shown.push(compact);
     }
     let synergy_links = report
         .pointer("/synergy/links")
@@ -1164,6 +1193,58 @@ mod tests {
             summary["entities_shown"],
             summary["entities"].as_array().unwrap().len()
         );
+    }
+
+    #[test]
+    fn a_summary_shows_the_best_of_every_kind_before_more_of_one() {
+        // An AS lookup: thousands of confident netblocks, and the one domain, the contacts and
+        // the holder that make the lookup useful, below or level with them.
+        let record = |source: &str| {
+            json!([{"provenance":{"source":source},"summary":"as published",
+                    "attributes":{"registry":"arin","handle":"x".repeat(200)}}])
+        };
+        let mut entities = vec![
+            json!({"kind":"asn","value":"AS64500","confidence":0.9,"corroboration":4,
+                   "tags":["seed"],"evidence":record("rdap")}),
+            json!({"kind":"email","value":"abuse@example.net","confidence":0.85,
+                   "corroboration":1,"tags":["abuse-contact"],"evidence":record("rdap")}),
+            json!({"kind":"organisation","value":"Example Net","confidence":0.85,
+                   "corroboration":2,"tags":[],"evidence":record("rdap")}),
+            json!({"kind":"domain","value":"example.net","confidence":0.65,
+                   "corroboration":1,"tags":["peeringdb-website"],"evidence":record("peeringdb")}),
+        ];
+        for n in 0..3000 {
+            entities.push(json!({
+                "kind":"netblock","value":format!("198.51.{}.0/24", n % 256),"confidence":0.85,
+                "corroboration":1,"tags":[],"evidence":record("ripestat"),
+            }));
+        }
+        let report = json!({"route":"asn","entities":entities,"outcomes":[]});
+        let summary = summarize_lookup(&report);
+        let shown: Vec<(&str, &str)> = summary["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| (e["kind"].as_str().unwrap(), e["value"].as_str().unwrap()))
+            .collect();
+        assert!(
+            shown.len() < 3004,
+            "the budget cuts most netblocks: {}",
+            shown.len()
+        );
+        // The first round is the best of every kind, lanes in rank order (the holder is better
+        // corroborated than the contact), the seed first; the domain, the weakest single
+        // entity, is shown before the second netblock.
+        assert_eq!(shown[0], ("asn", "AS64500"));
+        let first_round: Vec<&str> = shown.iter().take(5).map(|(kind, _)| *kind).collect();
+        assert_eq!(
+            first_round,
+            ["asn", "organisation", "email", "netblock", "domain"]
+        );
+        let position = |value: &str| shown.iter().position(|(_, v)| *v == value).unwrap();
+        assert!(position("example.net") < position("198.51.1.0/24"));
+        assert!(shown.iter().filter(|(kind, _)| *kind == "netblock").count() > 100);
+        assert_eq!(summary["entities_by_kind"]["netblock"], 3000);
     }
 
     #[test]

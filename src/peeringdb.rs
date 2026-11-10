@@ -474,7 +474,7 @@ fn add_peering_ips(record: &NetIxLan, scan_id: &str, entities: &mut Vec<Entity>)
         let mut entity = Entity::new(EntityKind::IpAddress, ip, PEER_IP_CONF, scan_id);
         entity.tag(SOURCE);
         entity.tag("peeringdb");
-        entity.tag("peeringdb-peering-ip");
+        entity.tag(crate::tags::PEERING_ADDRESS);
         entity.add_evidence(evidence);
         entities.push(entity);
     }
