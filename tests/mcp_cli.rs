@@ -102,6 +102,7 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
             "people_discover",
             "research",
             "investigate",
+            "investigate_file",
             "analyze",
             "ble_decode",
             "radar_wifi",
@@ -189,6 +190,87 @@ fn ble_decode_answers_offline_and_a_device_tool_says_why_it_cannot_here() {
     assert_eq!(wifi["isError"], true, "{wifi}");
     let why = wifi["content"][0]["text"].as_str().unwrap();
     assert!(!why.is_empty(), "{wifi}");
+}
+
+/// `investigate_file` reads a file on this machine as `investigate --file` reads it: the
+/// selectors in a text file, each with its evidence, under the `investigate` route with no
+/// source outcome; a path that is no readable regular file is a tool error in the command's own
+/// words, never a protocol error, and a symlink is refused as the command refuses it.
+#[test]
+fn investigate_file_reads_a_local_file_offline_and_refuses_what_the_command_refuses() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mcp-investigate-file");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let note = dir.join("note.txt");
+    std::fs::write(
+        &note,
+        "Seller: write to bob@example.net or see https://example.net/listing/42\n",
+    )
+    .unwrap();
+    let missing = dir.join("missing.txt");
+    #[cfg(unix)]
+    let link = {
+        let link = dir.join("link.txt");
+        std::os::unix::fs::symlink(&note, &link).unwrap();
+        link
+    };
+    let mut lines = vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},
+            "clientInfo":{"name":"mcp_cli test","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+            "name":"investigate_file","arguments":{"path":note.to_str().unwrap()}}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+            "name":"investigate_file","arguments":{"path":missing.to_str().unwrap()}}}),
+    ];
+    #[cfg(unix)]
+    lines.push(
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+        "name":"investigate_file","arguments":{"path":link.to_str().unwrap()}}}),
+    );
+    let (answers, stderr, code) = session(&lines);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+
+    let read = &answers[1]["result"];
+    assert_eq!(read["isError"], false, "{read}");
+    let report = &read["structuredContent"];
+    assert_eq!(report["route"], "investigate");
+    assert_eq!(report["outcomes"], json!([]));
+    let values: Vec<&str> = report["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entity| entity["value"].as_str().unwrap())
+        .collect();
+    assert!(values.contains(&"bob@example.net"), "{values:?}");
+    assert!(
+        values.contains(&"https://example.net/listing/42"),
+        "{values:?}"
+    );
+    assert!(
+        report["entities"][0]["evidence"]
+            .as_array()
+            .is_some_and(|evidence| !evidence.is_empty()),
+        "{report}"
+    );
+    // The text content is the same report, for a client that reads only text.
+    let text: Value = serde_json::from_str(read["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(&text, report);
+
+    let absent = &answers[2]["result"];
+    assert_eq!(absent["isError"], true, "{absent}");
+    let why = absent["content"][0]["text"].as_str().unwrap();
+    assert!(why.contains("missing.txt"), "{why}");
+    #[cfg(unix)]
+    {
+        let refused = &answers[3]["result"];
+        assert_eq!(refused["isError"], true, "{refused}");
+        let why = refused["content"][0]["text"].as_str().unwrap();
+        assert!(why.contains("link.txt"), "{why}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

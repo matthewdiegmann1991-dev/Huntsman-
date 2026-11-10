@@ -23,7 +23,7 @@ use huntsman_recon::web_server::{
     LookupError, LookupQuery, LookupReport, ServeConfig, Server, resolve_serve_bind,
 };
 
-use super::lookup::{Refused, collect, investigate_entities};
+use super::lookup::{Refused, collect, investigate_entities, investigate_file};
 use super::scans::{default_rules_dir, default_scan_dir, open_api};
 
 /// Printed once by `serve` under Termux. Android may stop a process that Termux started while
@@ -183,6 +183,18 @@ pub(super) fn investigate_report(
 /// `/api/investigate`: the `investigate` command over the text the page sends, as one report.
 pub(super) fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
     investigate_report(investigate_entities(text))
+}
+
+/// The MCP `investigate_file` tool: one local file, by its path on the machine the server runs
+/// on, read as `investigate --file` reads it, and its entities reported as `investigate` reports
+/// them. A file that cannot be read (missing, a symlink, over the bound) is the command's own
+/// refusal, with 404 where the command exits 66 (no input) and 400 otherwise.
+pub(super) fn web_investigate_file(path: &str) -> Result<LookupReport, LookupError> {
+    let entities = investigate_file(Path::new(path)).map_err(|(code, message)| LookupError {
+        status: if code == EX_NOINPUT { 404 } else { 400 },
+        message,
+    })?;
+    investigate_report(entities)
 }
 
 /// The object `GET /api/research`, the MCP `research` tool and `research --json` answer with:

@@ -89,6 +89,15 @@ pub trait Tools {
     /// A text the classifier cannot read, in words.
     fn investigate(&self, text: &str) -> Result<Value, ToolError>;
 
+    /// The actionable entities in one local file, by its path on the machine the server runs
+    /// on, as `investigate --file` reads it: a text file for the selectors in it and its
+    /// embedded metadata, any other file (a photo, a PDF, a document) for its embedded metadata.
+    /// Offline: no request, no key; the file is never modified.
+    ///
+    /// # Errors
+    /// A file that cannot be read (missing, a symlink, over the bound) or decoded, in words.
+    fn investigate_file(&self, path: &str) -> Result<Value, ToolError>;
+
     /// The offline multi-hop analysis of up to [`MAX_ANALYZE_SEEDS`] seeds: the links derived
     /// between them, the next pivots, correlations, gaps and the sources the planner would ask.
     ///
@@ -285,6 +294,9 @@ impl<'a, T: Tools + ?Sized> Server<'a, T> {
             "investigate" => refuse_unknown(arguments, &["text"])
                 .and_then(|()| text_argument(arguments, "text", MAX_TEXT_BYTES))
                 .and_then(|text| self.tools.investigate(&text)),
+            "investigate_file" => refuse_unknown(arguments, &["path"])
+                .and_then(|()| text_argument(arguments, "path", MAX_ARGUMENT_BYTES))
+                .and_then(|path| self.tools.investigate_file(&path)),
             "analyze" => analyze_arguments(arguments).and_then(|seeds| self.tools.analyze(&seeds)),
             "radar_wifi" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_wifi()),
             "radar_cells" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_cells()),
@@ -309,9 +321,11 @@ intelligence lookups. Every result carries its sources' typed outcomes (success,
 blocked, not_configured, upstream errors) beside the entities found. A source that did not \
 answer is not evidence of absence, and a name match, an indexed page or several engines \
 returning one URL does not prove identity. Report candidates as candidates. investigate, \
-analyze and ble_decode are offline (no request, no key): extract selectors from a text with \
-investigate, look the interesting ones up, then analyze the set for the links between them; \
-ble_decode reads the bytes of a Bluetooth LE advertisement a scanner showed. radar_wifi, \
+investigate_file, analyze and ble_decode are offline (no request, no key): extract selectors \
+from a text with investigate, or from a local file (a photo, a PDF, a document, a text; its \
+embedded metadata too) with investigate_file by its path on this machine, look the interesting \
+ones up, then analyze the set for the links between them; ble_decode reads the bytes of a \
+Bluetooth LE advertisement a scanner showed. radar_wifi, \
 radar_cells and radar_track read this device's own OS-cached radio sightings through Termux:API \
 when the server runs on an Android phone; elsewhere they say why they cannot.";
 
@@ -370,6 +384,7 @@ pub fn tool_definitions() -> Vec<Value> {
         people_discover_tool(),
         research_tool(),
         investigate_tool(),
+        investigate_file_tool(),
         analyze_tool(),
         ble_decode_tool(),
         radar_wifi_tool(),
@@ -660,6 +675,36 @@ fn investigate_tool() -> Value {
             "additionalProperties": false,
         },
         "annotations": offline_hints("Extract selectors from text"),
+    })
+}
+
+/// The `investigate_file` tool.
+fn investigate_file_tool() -> Value {
+    json!({
+        "name": "investigate_file",
+        "title": "Extract selectors and metadata from a local file",
+        "description": "Offline: no request, no key. Read one local file by its path on the \
+    machine this server runs on, as investigate --file reads it: a text file (up to 1 MiB) for \
+    every selector in it as investigate finds them, and for its embedded metadata when it carries \
+    any; any other file (a photo, a PDF, an Office document; up to 64 MiB) for its embedded \
+    metadata: the EXIF and document fields, a GPS position as coordinates, every email address, \
+    link, domain, IP address or phone number written into a field people write, and every person \
+    or organisation named as its author, creator or owner, each attributed to its field. A \
+    symbolic link is refused; the file is never modified.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "The file's path on this machine, absolute by preference.",
+                },
+            },
+            "required": ["path"],
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("Extract selectors and metadata from a local file"),
     })
 }
 
@@ -1032,6 +1077,13 @@ mod tests {
             Ok(json!({ "route": "investigate", "entities": [] }))
         }
 
+        fn investigate_file(&self, path: &str) -> Result<Value, ToolError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("investigate_file {path}"));
+            Ok(json!({ "route": "investigate", "entities": [] }))
+        }
+
         fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError> {
             self.calls
                 .borrow_mut()
@@ -1188,6 +1240,7 @@ mod tests {
                 "people_discover",
                 "research",
                 "investigate",
+                "investigate_file",
                 "analyze",
                 "ble_decode",
                 "radar_wifi",
@@ -1209,7 +1262,10 @@ mod tests {
             assert!(tool["description"].as_str().unwrap().len() > 40, "{tool}");
             // The offline tools say so: a model may call them freely and expect the same answer.
             // The device tools read this phone, not the open world, and not the same twice.
-            let offline = matches!(name, "investigate" | "analyze" | "ble_decode");
+            let offline = matches!(
+                name,
+                "investigate" | "investigate_file" | "analyze" | "ble_decode"
+            );
             let device = name.starts_with("radar_");
             assert_eq!(
                 tool["annotations"]["openWorldHint"],
@@ -1328,6 +1384,11 @@ mod tests {
         );
         call(
             &tools,
+            "investigate_file",
+            &json!({"path":" /sdcard/DCIM/IMG_0001.jpg "}),
+        );
+        call(
+            &tools,
             "analyze",
             &json!({"seeds":[" a@example.com ", "example.com"]}),
         );
@@ -1340,6 +1401,7 @@ mod tests {
                 "discover Clara Ashwell Au",
                 "research rust termux",
                 "investigate mail a@example.com",
+                "investigate_file /sdcard/DCIM/IMG_0001.jpg",
                 "analyze a@example.com,example.com",
             ]
         );
@@ -1366,6 +1428,14 @@ mod tests {
             (
                 "investigate",
                 json!({"text":"x".repeat(MAX_TEXT_BYTES + 1)}),
+            ),
+            ("investigate_file", json!({})),
+            ("investigate_file", json!({"path":"   "})),
+            ("investigate_file", json!({"path":7})),
+            ("investigate_file", json!({"path":"/tmp/a","text":"x"})),
+            (
+                "investigate_file",
+                json!({"path":"x".repeat(MAX_ARGUMENT_BYTES + 1)}),
             ),
             ("analyze", json!({})),
             ("analyze", json!({"seeds":"a@example.com"})),
@@ -1541,6 +1611,9 @@ mod tests {
                 unreachable!()
             }
             fn investigate(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn investigate_file(&self, _: &str) -> Result<Value, ToolError> {
                 unreachable!()
             }
             fn analyze(&self, _: &[String]) -> Result<Value, ToolError> {

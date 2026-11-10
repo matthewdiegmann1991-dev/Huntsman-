@@ -50,14 +50,7 @@ pub(in crate::cli) fn investigate_cmd(args: &[String]) -> ExitCode {
         if args.len() != 2 {
             return fail(EX_USAGE, "investigate --file needs exactly one FILE");
         }
-        let path = Path::new(&args[1]);
-        // The metadata readers' own bound: a photo or a document is read whole.
-        let bytes = match read_bounded(path, docmeta::MAX_FILE_BYTES) {
-            Ok(bytes) => bytes,
-            Err(Error::Store(message)) => return fail(EX_NOINPUT, &message),
-            Err(error) => return fail(EX_DATAERR, &error.to_string()),
-        };
-        match file_entities(path, bytes) {
+        match investigate_file(Path::new(&args[1])) {
             Ok(entities) => entities,
             Err((code, message)) => return fail(code, &message),
         }
@@ -92,6 +85,20 @@ pub(in crate::cli) fn investigate_cmd(args: &[String]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// The entities `investigate --file FILE` and the MCP `investigate_file` tool read in one local
+/// file: one authority for both. The file is read whole within the metadata readers' own bound
+/// ([`docmeta::MAX_FILE_BYTES`]) by [`read_bounded`], which refuses a symlink or anything but a
+/// regular file, then read as [`file_entities`] reads it. `Err` is the exit status the command
+/// fails with and the message.
+pub(in crate::cli) fn investigate_file(path: &Path) -> Result<Vec<entity::Entity>, (u8, String)> {
+    let bytes = match read_bounded(path, docmeta::MAX_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(Error::Store(message)) => return Err((EX_NOINPUT, message)),
+        Err(error) => return Err((EX_DATAERR, error.to_string())),
+    };
+    file_entities(path, bytes)
 }
 
 /// What `investigate --file` reads in one file. A text file up to [`MAX_PLAIN_FILE_BYTES`] is read

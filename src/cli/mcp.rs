@@ -19,8 +19,10 @@ binary as a tool. One JSON-RPC message per line in each direction; nothing else 
 standard output. Tools: lookup (every typed lookup and the public news, notices, web and \
 dossier searches), people_discover and research, each running exactly as serve's JSON API runs \
 it, with the same keys and the same public-only egress; investigate (the selectors in a text), \
-analyze (the offline multi-hop analysis of up to 16 seeds) and ble_decode (the bytes of a \
-Bluetooth LE advertisement a scanner showed), which make no request; and radar_wifi, \
+investigate_file (the selectors and embedded metadata in one local file, by its path, as \
+investigate --file reads it), analyze (the offline multi-hop analysis of up to 16 seeds) and \
+ble_decode (the bytes of a Bluetooth LE advertisement a scanner showed), which make no request; \
+and radar_wifi, \
 radar_cells and radar_track, which read this device's OS-cached radio sightings through \
 Termux:API as radar does, on an Android phone only. Register it with a client by its absolute \
 path, for example: claude mcp add huntsman -- /path/to/huntsman-recon mcp. Makes network \
@@ -55,6 +57,10 @@ impl Tools for Live {
         let report = super::service::web_investigate(text).map_err(refusal)?;
         serde_json::to_value(report)
             .map_err(|error| format!("report could not be encoded: {error}"))
+    }
+
+    fn investigate_file(&self, path: &str) -> Result<Value, ToolError> {
+        encode(super::service::web_investigate_file(path).map_err(refusal)?)
     }
 
     fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError> {
