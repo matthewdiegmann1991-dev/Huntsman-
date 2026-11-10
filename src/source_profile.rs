@@ -101,6 +101,7 @@ pub const PROFILES: &[SourceProfile] = &[
     // lineage is NOT authenticated by it.
     row("acnc", C::IdentityRegistry, None),
     row("adguard_dns", C::Infra, None),
+    row("aec_transparency", C::Other, Some(C::IdentityRegistry)),
     row("alienvaultiprep", C::Infra, None),
     row("apk_intel", C::Other, None),
     row("apk_set", C::Other, None),

@@ -29,7 +29,7 @@ use crate::wikidata;
 pub const PEOPLE_USAGE: &str = "usage: huntsman-recon people NAME [--save FILE] [--json]";
 pub const PEOPLE_HELP: &str = "\
 people NAME [--save FILE] [--json]
-Look up NAME on the keyless ASIC people and director registers, Wikidata, the ACNC charity register, SEC EDGAR, the OFAC, UN, EU and DFAT (Australian) sanctions lists (kept on the device), ICIJ Offshore Leaks nodes and FBI wanted notices that name every word of NAME. Fewer than two alphabetic tokens makes no request. One source failure does not abort the others. --save FILE writes an unverified ledger that verify can reload; skip does not write.
+Look up NAME on the keyless ASIC people and director registers, Wikidata, the ACNC charity register, SEC EDGAR, the OFAC, UN, EU and DFAT (Australian) sanctions lists and the AEC Transparency Register's annual returns (kept on the device), ICIJ Offshore Leaks nodes and FBI wanted notices that name every word of NAME. Fewer than two alphabetic tokens makes no request. One source failure does not abort the others. --save FILE writes an unverified ledger that verify can reload; skip does not write.
 
 The lookup queries independent sources:
   1. ASIC people register (company associates and sole traders)
@@ -81,6 +81,28 @@ pub const SKIP_LINE: &str = "people: skipped (need two alphabetic tokens)\n";
 #[must_use]
 pub fn run<T: Transport + ?Sized>(transport: &T, name: &str, now_unix: u64) -> PeopleRun {
     run_with_lists(transport, &crate::sanctions::Lists::none(), name, now_unix)
+}
+
+/// The registers kept on the device and matched locally, into `report`: the consolidated
+/// sanctions lists (each listing that carries every word of the name is a Document lead keyed
+/// by the listing) and the AEC Transparency Register's annual returns (each return that names
+/// every word of the name, a Document lead keyed by its row).
+fn kept_registers(
+    lists: &crate::sanctions::Lists,
+    name: &str,
+    scan_id: &str,
+    now_unix: u64,
+    report: &mut Report,
+) {
+    let (listed, list_outcomes) = crate::sanctions::check(lists, name, scan_id, now_unix);
+    report.entities.extend(listed);
+    report.outcomes.extend(list_outcomes);
+    if let Some((returns, outcome)) = lists.transport().and_then(|transport| {
+        crate::aec_returns::check(transport, lists.dir(), name, scan_id, now_unix)
+    }) {
+        report.entities.extend(returns);
+        report.outcomes.push(outcome);
+    }
 }
 
 /// [`run`], also matching the name against the consolidated sanctions lists `lists` keeps on
@@ -161,11 +183,7 @@ pub fn run_with_lists<T: Transport + ?Sized>(
         );
     }
 
-    // The consolidated sanctions lists, matched locally against copies kept on the device: each
-    // listing that carries every word of the name is a Document lead keyed by the listing.
-    let (listed, list_outcomes) = crate::sanctions::check(lists, &name, &scan_id, now_unix);
-    report.entities.extend(listed);
-    report.outcomes.extend(list_outcomes);
+    kept_registers(lists, &name, &scan_id, now_unix, &mut report);
     if transport.runs_module(crate::icij_offshore::SOURCE) {
         // ICIJ Offshore Leaks: nodes whose name carries every word of NAME, each a Document keyed
         // by its node URL, so a leaked record never merges into a same-named person elsewhere.

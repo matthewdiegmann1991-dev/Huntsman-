@@ -119,6 +119,7 @@ pub fn modules(kind: ScanKind) -> Vec<&'static str> {
             crate::acnc::SRC,
             crate::sec_edgar::SOURCE,
             crate::sanctions::SOURCE,
+            crate::aec_returns::SOURCE,
             crate::icij_offshore::SOURCE,
             crate::public_osint::NOTICES,
             seeknow_collector::COLLECTOR_ID,

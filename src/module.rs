@@ -389,6 +389,15 @@ const REACHABLE_MODULES: &[ReachableModule] = &[
         description: "OFAC SDN, UN Security Council, EU and DFAT (Australian) sanctions listings that name every word of the person's name, matched on the device",
     },
     ReachableModule {
+        name: "aec_transparency",
+        command: "people NAME",
+        access: "keyless",
+        network: true,
+        category: ModuleCategory::Corporate,
+        attack_techniques: &["T1591.002"],
+        description: "AEC Transparency Register annual returns (donations made and received, receipts, debts, party, associated-entity, third-party and member returns) that name every word of the person's or organisation's name, kept on the device and matched locally",
+    },
+    ReachableModule {
         name: "icij_offshore",
         command: "people NAME",
         access: "keyless",
