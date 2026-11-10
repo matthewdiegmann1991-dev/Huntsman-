@@ -43,6 +43,8 @@ pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 /// The longest saved-scan answer `scan_read` returns (512 KiB): a whole scan's elements can run
 /// to megabytes, which no model reads; past this the tool says so and names the narrower views.
 pub const MAX_SCAN_VIEW_BYTES: usize = 512 * 1024;
+/// The most saved scans `scans_list` returns, newest first; the answer counts the rest.
+pub const MAX_LISTED_SCANS: usize = 200;
 
 /// What `scan_read` reads of one saved scan: each the answer of the scan API route `serve`
 /// serves and the `scans` subcommand prints, over the same saved files.
@@ -386,8 +388,20 @@ impl<'a, T: Tools + ?Sized> Server<'a, T> {
             "scans_list" => refuse_unknown(arguments, &[])
                 .and_then(|()| self.tools.scans_list())
                 .map(|scans| {
-                    let count = scans.as_array().map_or(0, Vec::len);
-                    json!({ "count": count, "scans": scans })
+                    // The store lists newest first; a phone with years of scans is not read
+                    // whole, the answer says how many there are and how many it holds.
+                    let mut rows = match scans {
+                        Value::Array(rows) => rows,
+                        other => vec![other],
+                    };
+                    let count = rows.len();
+                    rows.truncate(MAX_LISTED_SCANS);
+                    json!({
+                        "count": count,
+                        "listed": rows.len(),
+                        "truncated": count > rows.len(),
+                        "scans": rows,
+                    })
                 }),
             "scan_read" => scan_read_arguments(arguments).and_then(|(id, view, kind)| {
                 let report = self.tools.scan_read(&id, view, kind.as_deref())?;
@@ -889,9 +903,13 @@ fn scans_list_tool() -> Value {
     json!({
         "name": "scans_list",
         "title": "List the scans saved on this machine",
-        "description": "Offline: no request, no key. The scans saved on this machine by serve, \
+        "description": format!(
+            "Offline: no request, no key. The scans saved on this machine by serve, \
     scan and the JSON API, as scans list and GET /api/scans list them: each its id, name, target, \
-    kind, status, times, element and correlation counts. Read one with scan_read.",
+    kind, status, times, element and correlation counts; the newest {most} of them, newest \
+    first, with count saying how many there are. Read one with scan_read.",
+            most = MAX_LISTED_SCANS,
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -1685,6 +1703,8 @@ mod tests {
         );
         let listed = call(&tools, "scans_list", &json!({}));
         assert_eq!(listed["result"]["structuredContent"]["count"], 1);
+        assert_eq!(listed["result"]["structuredContent"]["listed"], 1);
+        assert_eq!(listed["result"]["structuredContent"]["truncated"], false);
         assert_eq!(
             listed["result"]["structuredContent"]["scans"][0]["id"],
             "0123456789abcdef"
@@ -1716,6 +1736,75 @@ mod tests {
                 "scan_read 0123456789abcdef elements EMAILADDR",
             ]
         );
+    }
+
+    /// A machine with more saved scans than a model reads is listed newest first within
+    /// [`MAX_LISTED_SCANS`], the answer counting every scan and saying it was cut; one with
+    /// fewer is listed whole and says it was not.
+    #[test]
+    fn a_long_scan_list_is_cut_to_the_newest_and_counted() {
+        struct Many(usize);
+        impl Tools for Many {
+            fn lookup(&self, _: &str, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn people_discover(&self, _: &str, _: Region) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn research(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn research_mission(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn investigate(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn investigate_file(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn analyze(&self, _: &[String]) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn scans_list(&self) -> Result<Value, ToolError> {
+                Ok(Value::Array(
+                    (0..self.0)
+                        .map(|index| json!({ "id": format!("{index:016x}"), "created": self.0 - index }))
+                        .collect(),
+                ))
+            }
+            fn scan_read(&self, _: &str, _: ScanView, _: Option<&str>) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn radar_wifi(&self) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn radar_cells(&self) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn radar_track(&self) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+        }
+        let list = |count: usize| {
+            let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"scans_list"}});
+            Server::new(&Many(count), "t")
+                .handle_line(request.to_string().as_bytes())
+                .unwrap()["result"]["structuredContent"]
+                .clone()
+        };
+        let cut = list(MAX_LISTED_SCANS + 37);
+        assert_eq!(cut["count"], MAX_LISTED_SCANS + 37);
+        assert_eq!(cut["listed"], MAX_LISTED_SCANS);
+        assert_eq!(cut["truncated"], true);
+        let rows = cut["scans"].as_array().unwrap();
+        assert_eq!(rows.len(), MAX_LISTED_SCANS);
+        assert_eq!(rows[0]["id"], format!("{:016x}", 0), "the newest first");
+        let whole = list(3);
+        assert_eq!(whole["count"], 3);
+        assert_eq!(whole["listed"], 3);
+        assert_eq!(whole["truncated"], false);
     }
 
     #[test]
