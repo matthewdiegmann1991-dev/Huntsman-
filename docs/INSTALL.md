@@ -361,7 +361,7 @@ over `adb`; Termux's
 
 ## Optional self-hosted Linux container
 
-For a generic, unprivileged Linux container, consult [CONTAINERS.md](CONTAINERS.md).
+For a generic, unprivileged Linux container, consult [CONTAINERS.md](CONTAINERS.md); its Railway section deploys the same image from `railway.toml`.
 No provider-specific environment is required, and local Termux server binding
 remains loopback-only by default.
 

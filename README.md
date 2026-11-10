@@ -12,4 +12,4 @@ It ends by printing `Web UI: running at http://127.0.0.1:8080`; open that addres
 
 From an LLM application (Claude Desktop, Claude Code, Cursor), `huntsman-recon mcp` serves the same lookups, saved scans and offline readers over the Model Context Protocol: [Use from LLM applications](docs/USAGE.md#use-from-llm-applications-mcp).
 
-Full usage, commands and reference: [docs/USAGE.md](docs/USAGE.md). Installation details: [docs/INSTALL.md](docs/INSTALL.md).
+Full usage, commands and reference: [docs/USAGE.md](docs/USAGE.md). Installation details: [docs/INSTALL.md](docs/INSTALL.md). A self-hosted container, and the same image on Railway from `railway.toml`: [docs/CONTAINERS.md](docs/CONTAINERS.md).

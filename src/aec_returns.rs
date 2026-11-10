@@ -6,9 +6,10 @@
 //! the threat feeds' download-and-keep machinery ([`crate::threat_feeds::load`]), kept on the
 //! device and refreshed weekly, and a name is matched locally, so a lookup sends nothing about
 //! who is being looked up. A row matches when the name in one of its name columns carries every
-//! word of the name asked. A match is a lead to review, never proof that the person or
-//! organisation named in the return is the one looked up: each is a `Document` keyed by its
-//! table, financial year and the names in the row, its whole row kept verbatim as evidence.
+//! word of the name asked, or when its ABN or ACN column holds the number asked. A match is a
+//! lead to review, never proof that the person or organisation named in the return is the one
+//! looked up: each is a `Document` keyed by its table, financial year and the names in the row,
+//! its whole row kept verbatim as evidence.
 
 use std::path::Path;
 
@@ -230,6 +231,16 @@ struct Match {
     fields: Vec<(&'static str, String)>,
 }
 
+/// What a row is matched by: a name, every word of which a name column must carry, or an ABN
+/// or ACN, which the row's own ABN or ACN column must hold.
+enum Matcher {
+    Name(Vec<String>),
+    Id(String),
+}
+
+/// The columns an ABN or ACN is looked for in.
+const ID_COLUMNS: [&str; 2] = ["ABN", "ACN"];
+
 /// Match `name` against every table of the register's archive (kept, or downloaded over
 /// `transport` and kept in `dir`): the rows that name it, as `Document` leads, and the one
 /// outcome. `None` when the transport does not run this module or the name has fewer than two
@@ -243,11 +254,39 @@ pub fn check(
     scan_id: &str,
     now_unix: u64,
 ) -> Option<(Vec<Entity>, SourceExecutionOutcome)> {
-    if !transport.runs_module(SOURCE) {
-        return None;
-    }
     let query = crate::textnorm::name_tokens(name);
     if query.len() < 2 {
+        return None;
+    }
+    check_with(transport, dir, &Matcher::Name(query), scan_id, now_unix)
+}
+
+/// [`check`] for an ABN or ACN: the rows of the returns that carry one (the third-party and
+/// significant third-party returns) whose ABN or ACN column holds `id`, its digits compared.
+/// `None` when the transport does not run this module or `id` holds no digit.
+#[must_use]
+pub fn check_id(
+    transport: &(dyn Transport + Send + Sync),
+    dir: Option<&Path>,
+    id: &str,
+    scan_id: &str,
+    now_unix: u64,
+) -> Option<(Vec<Entity>, SourceExecutionOutcome)> {
+    let digits: String = id.chars().filter(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    check_with(transport, dir, &Matcher::Id(digits), scan_id, now_unix)
+}
+
+fn check_with(
+    transport: &(dyn Transport + Send + Sync),
+    dir: Option<&Path>,
+    criterion: &Matcher,
+    scan_id: &str,
+    now_unix: u64,
+) -> Option<(Vec<Entity>, SourceExecutionOutcome)> {
+    if !transport.runs_module(SOURCE) {
         return None;
     }
     let copy = match load(transport, dir, &ARCHIVE, now_unix) {
@@ -278,7 +317,7 @@ pub fn check(
     let mut missing = Vec::new();
     for table in &TABLES {
         match read_table(&copy.body, table) {
-            Ok(text) => rows += match_table(&text, table, &query, &mut matches),
+            Ok(text) => rows += match_table(&text, table, criterion, &mut matches),
             Err(why) => missing.push(why),
         }
     }
@@ -339,12 +378,13 @@ fn read_table(archive: &[u8], table: &Table) -> Result<String, Failure> {
     }
 }
 
-/// Every row of `text` (a CSV table, its header first) that names `query` in one of the table's
-/// name columns, at most [`MAX_MATCHES`], pushed to `matches`; the rows read. **Pure.**
+/// Every row of `text` (a CSV table, its header first) that `criterion` matches, in one of the
+/// table's name columns or its ABN or ACN column, at most [`MAX_MATCHES`], pushed to `matches`;
+/// the rows read. **Pure.**
 fn match_table(
     text: &str,
     table: &'static Table,
-    query: &[String],
+    criterion: &Matcher,
     matches: &mut Vec<Match>,
 ) -> usize {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -358,11 +398,16 @@ fn match_table(
             .iter()
             .position(|cell| cell.trim().eq_ignore_ascii_case(title))
     };
-    let names: Vec<(usize, &'static str)> = table
-        .names
+    // The columns looked in: the name columns for a name, the ABN and ACN columns for a number.
+    let looked: &[&'static str] = match criterion {
+        Matcher::Name(_) => table.names,
+        Matcher::Id(_) => &ID_COLUMNS,
+    };
+    let names: Vec<(usize, &'static str)> = looked
         .iter()
         .filter_map(|title| column(title).map(|at| (at, *title)))
         .collect();
+    let name_at = column("Name").or_else(|| table.names.first().and_then(|title| column(title)));
     let kept: Vec<(usize, &'static str)> = table
         .kept
         .iter()
@@ -381,7 +426,28 @@ fn match_table(
         let cells = csv_fields(line);
         let Some((column_title, name)) = names.iter().find_map(|(at, title)| {
             let value = cells.get(*at).map_or("", |cell| cell.trim());
-            names_query(value, query).then(|| (*title, value.to_owned()))
+            let hit = match criterion {
+                Matcher::Name(query) => names_query(value, query),
+                Matcher::Id(digits) => {
+                    !digits.is_empty()
+                        && value
+                            .chars()
+                            .filter(char::is_ascii_digit)
+                            .collect::<String>()
+                            == *digits
+                }
+            };
+            hit.then(|| {
+                // A number names the row by the return's own name.
+                let shown = match criterion {
+                    Matcher::Name(_) => value.to_owned(),
+                    Matcher::Id(_) => name_at
+                        .and_then(|at| cells.get(at))
+                        .map_or(value, |cell| cell.trim())
+                        .to_owned(),
+                };
+                (*title, shown)
+            })
         }) else {
             continue;
         };
@@ -486,4 +552,4 @@ fn record(found: &Match, scan_id: &str, entities: &mut Vec<Entity>) {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

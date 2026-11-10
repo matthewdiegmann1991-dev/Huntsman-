@@ -1,0 +1,20 @@
+# Railway deployment profile for the provider-neutral container image (docs/CONTAINERS.md,
+# "Railway"). Railway reads this file from the repository root. Everything the service needs at
+# run time is the generic entrypoint's own contract: PORT is honoured and HSE_BIND set from it,
+# the state lives under /data (mount a volume there), the bearer token comes from HSE_AUTH_TOKEN,
+# and the build embeds the commit when the service variable HUNTSMAN_SOURCE_SHA is set to
+# ${{RAILWAY_GIT_COMMIT_SHA}}. This file names the Dockerfile, the health route and the restart
+# policy, keeps the service awake so a long scan is not stopped mid-way, and holds it to one
+# replica, which the saved-scan store (one owner per scan directory) needs.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+numReplicas = 1
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300
+sleepApplication = false
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
