@@ -179,7 +179,7 @@ fn help_and_version_are_available() {
         ("attack", "attack status|coverage|gaps [--json]"),
         (
             "query",
-            "query [--adaptive] [--all] QUERY... | query --exa QUERY...",
+            "query [--adaptive] [--all] QUERY... [--json] | query --exa QUERY... [--json]",
         ),
         ("research", "research [--plan] [--all] TERM..."),
         ("sf", "sf [-M|-T|-V]"),

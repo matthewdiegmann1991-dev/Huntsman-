@@ -194,6 +194,16 @@ pub(super) fn research_json<T: serde::Serialize>(report: &T) -> serde_json::Valu
     })
 }
 
+/// The object `query --json` prints: the route and the keyless search report (its hits, each an
+/// engine and a URL, and an outcome per engine), named as `research --json` names the adaptive
+/// route's, so an agent reads which search answered before it reads the answer. **Pure.**
+pub(super) fn query_json(report: &huntsman_recon::web_query::SearchReport) -> serde_json::Value {
+    serde_json::json!({
+        "route": "web_search",
+        "report": report,
+    })
+}
+
 /// `/api/lookup` over the same routing and front-ends as `scan`.
 pub(super) fn web_lookup(query: &LookupQuery) -> Result<LookupReport, LookupError> {
     if let Some(result) = super::public_osint::web_lookup(query) {
@@ -512,9 +522,30 @@ pub(super) fn serve_cmd(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{rule_error_line, web_inspect, web_investigate};
+    use super::{query_json, research_json, rule_error_line, web_inspect, web_investigate};
     use huntsman_recon::entity::{Entity, EntityKind};
     use huntsman_recon::source_outcome::SourceOutcomeKind;
+    use huntsman_recon::web_query::{SearchHit, SearchReport};
+
+    /// `query --json` and `research --json` name their routes apart, each over its own report,
+    /// so an agent that ran either reads which search answered before it reads the answer.
+    #[test]
+    fn query_json_names_the_keyless_route_over_the_search_report() {
+        let report = SearchReport {
+            hits: vec![SearchHit {
+                engine: "mojeek".into(),
+                url: "https://example.org/q".into(),
+                text: String::new(),
+            }],
+            outcomes: Vec::new(),
+        };
+        let value = query_json(&report);
+        assert_eq!(value["route"], "web_search");
+        assert_eq!(value["report"]["hits"][0]["engine"], "mojeek");
+        assert_eq!(value["report"]["hits"][0]["url"], "https://example.org/q");
+        assert_eq!(value["report"]["outcomes"], serde_json::json!([]));
+        assert_eq!(research_json(&report)["route"], "adaptive_web_search");
+    }
 
     /// The page's text goes through the same extraction as `investigate TEXT...`: every actionable
     /// entity in it, with the classifier's signal as evidence, rendered as the command prints it;

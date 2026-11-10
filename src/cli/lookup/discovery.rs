@@ -25,6 +25,8 @@ use huntsman_recon::web_query::{self, EngineSet};
 
 const INVESTIGATE_USAGE: &str =
     "usage: huntsman-recon investigate TEXT... [--json] | investigate --file FILE [--json]";
+const QUERY_USAGE: &str = "usage: huntsman-recon query [--adaptive] [--all] QUERY... [--json]";
+const QUERY_EXA_USAGE: &str = "usage: huntsman-recon query --exa QUERY... [--json]";
 
 /// The actionable entities in `text`, each with the classifier's evidence, as `investigate`
 /// prints them and `POST /api/investigate` answers them: one authority for both.
@@ -143,56 +145,76 @@ fn parse_query_flags(args: &[String]) -> Option<(bool, EngineSet, &[String])> {
         .then_some((adaptive, engines, terms))
 }
 
-pub(in crate::cli) fn query_cmd(args: &[String]) -> ExitCode {
-    if args.is_empty() {
-        return fail(EX_USAGE, "usage: huntsman-recon query QUERY...");
+/// `query --exa`: Exa's results for the query, with the operator's key; the rows, or with
+/// `json` one object naming the route and the URLs. Exit 69 when Exa returned none.
+fn query_exa(terms: &[String], json: bool) -> ExitCode {
+    if terms.is_empty() || terms.iter().any(|term| term.starts_with("--")) {
+        return fail(EX_USAGE, QUERY_EXA_USAGE);
     }
-    // Exa consumes provider credits: never enable it for ordinary or adaptive
-    // queries. The explicit flag is the sole network trigger for this source.
-    if args.first().is_some_and(|arg| arg == "--exa") {
-        let terms = &args[1..];
-        if terms.is_empty() || terms.iter().any(|term| term.starts_with("--")) {
-            return fail(EX_USAGE, "usage: huntsman-recon query --exa QUERY...");
-        }
-        let query = terms.join(" ");
-        let home = std::env::var_os("HOME");
-        let keys = match Keys::resolve(None, home.as_deref()) {
-            Ok(resolved) => resolved.keys,
-            Err(error) => return fail(EX_UNAVAILABLE, &error.to_string()),
-        };
-        let transport = UreqTransport::new(&TransportConfig::default());
-        return match exa::search(&transport, &keys, &query, clock::unix_now()) {
-            Ok(urls) => {
-                let outcome = if urls.is_empty() {
-                    "valid_zero"
-                } else {
-                    "success"
-                };
+    let query = terms.join(" ");
+    let home = std::env::var_os("HOME");
+    let keys = match Keys::resolve(None, home.as_deref()) {
+        Ok(resolved) => resolved.keys,
+        Err(error) => return fail(EX_UNAVAILABLE, &error.to_string()),
+    };
+    let transport = UreqTransport::new(&TransportConfig::default());
+    match exa::search(&transport, &keys, &query, clock::unix_now()) {
+        Ok(urls) => {
+            let outcome = if urls.is_empty() {
+                "valid_zero"
+            } else {
+                "success"
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "route": "exa_web_search",
+                        "engine": "exa",
+                        "outcome": outcome,
+                        "urls": urls,
+                    })
+                );
+            } else {
                 println!("engine=exa\toutcome={outcome}\tfound={}", urls.len());
                 for url in &urls {
                     println!("exa\t{}\tlead_only", escape_controls(url));
                 }
                 println!("hits={}", urls.len());
-                if urls.is_empty() {
-                    ExitCode::from(EX_UNAVAILABLE)
-                } else {
-                    ExitCode::SUCCESS
-                }
             }
-            Err(error) => {
-                eprintln!(
-                    "engine=exa\toutcome={}\tfound=none",
-                    error.outcome_kind().as_str()
-                );
-                fail(EX_UNAVAILABLE, &error.to_string())
+            if urls.is_empty() {
+                ExitCode::from(EX_UNAVAILABLE)
+            } else {
+                ExitCode::SUCCESS
             }
-        };
+        }
+        Err(error) => {
+            eprintln!(
+                "engine=exa\toutcome={}\tfound=none",
+                error.outcome_kind().as_str()
+            );
+            fail(EX_UNAVAILABLE, &error.to_string())
+        }
     }
-    let Some((adaptive, engines, terms)) = parse_query_flags(args) else {
-        return fail(
-            EX_USAGE,
-            "usage: huntsman-recon query [--adaptive] [--all] QUERY...",
-        );
+}
+
+pub(in crate::cli) fn query_cmd(args: &[String]) -> ExitCode {
+    // `--json` is taken from wherever it was typed, as the typed lookups take it, so it is never
+    // searched for as a word of the query.
+    let (args, json) = match super::profiles::take_json(args) {
+        Ok(split) => split,
+        Err(error) => return fail(EX_USAGE, &format!("{error}\n{QUERY_USAGE}")),
+    };
+    if args.is_empty() {
+        return fail(EX_USAGE, "usage: huntsman-recon query QUERY... [--json]");
+    }
+    // Exa consumes provider credits: never enable it for ordinary or adaptive
+    // queries. The explicit flag is the sole network trigger for this source.
+    if args.first().is_some_and(|arg| arg == "--exa") {
+        return query_exa(&args[1..], json);
+    }
+    let Some((adaptive, engines, terms)) = parse_query_flags(&args) else {
+        return fail(EX_USAGE, QUERY_USAGE);
     };
     let query = terms.join(" ");
     let now = clock::unix_now();
@@ -201,9 +223,14 @@ pub(in crate::cli) fn query_cmd(args: &[String]) -> ExitCode {
     if adaptive {
         return match web_query::adaptive_search(&transport, &query, now, engines) {
             Ok(report) => {
-                match terminal_json_pretty(&report) {
-                    Ok(serialized) => println!("{serialized}"),
-                    Err(error) => return fail(EX_UNAVAILABLE, &error.to_string()),
+                if json {
+                    // The object `research --json` prints for the adaptive route: one line.
+                    println!("{}", crate::cli::service::research_json(&report));
+                } else {
+                    match terminal_json_pretty(&report) {
+                        Ok(serialized) => println!("{serialized}"),
+                        Err(error) => return fail(EX_UNAVAILABLE, &error.to_string()),
+                    }
                 }
                 if report.hits.is_empty() {
                     ExitCode::from(EX_UNAVAILABLE)
@@ -219,7 +246,11 @@ pub(in crate::cli) fn query_cmd(args: &[String]) -> ExitCode {
 
     match web_query::search(&transport, &query, now, engines) {
         Ok(report) => {
-            print!("{}", report.render());
+            if json {
+                println!("{}", crate::cli::service::query_json(&report));
+            } else {
+                print!("{}", report.render());
+            }
             if report.hits.is_empty() {
                 ExitCode::from(EX_UNAVAILABLE)
             } else {

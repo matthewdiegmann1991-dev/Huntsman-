@@ -159,7 +159,7 @@ registry! {
     name: "research", summary: "Research any term using existing typed or keyless adaptive capabilities",
     synopsis: "research [--plan] [--all] TERM... [--json]", run: super::research::research_cmd;
     name: "query", summary: "Keyless web search; --adaptive aggregates leads; --all asks 13 engines; --exa uses optional search credits",
-    synopsis: "query [--adaptive] [--all] QUERY... | query --exa QUERY...", run: super::lookup::query_cmd;
+    synopsis: "query [--adaptive] [--all] QUERY... [--json] | query --exa QUERY... [--json]", run: super::lookup::query_cmd;
     name: "privacy-audit", summary: "Assess a source-backed public entity graph offline (no network)",
     synopsis: "privacy-audit PUBLIC-GRAPH.json", run: super::privacy::privacy_cmd;
     name: "public-osint", summary: "Independent GDELT news, FBI notices and multi-engine public dossiers",
