@@ -158,11 +158,13 @@ fn web_inspect(label: &str, bytes: &[u8]) -> Result<LookupReport, LookupError> {
     })
 }
 
-/// `/api/investigate`: the `investigate` command over the text the page sends, as one report. The
-/// classifier makes no request, so the report has no outcomes; each entity carries the
-/// classifier's evidence naming the signal that found it.
-pub(super) fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
-    let entities = investigate_entities(text);
+/// The report `investigate --json` prints, `POST /api/investigate` answers and the MCP
+/// `investigate` tool returns, over the entities one text or file yielded: one authority for
+/// all three. The classifier makes no request, so the report has no outcomes; each entity
+/// carries the evidence naming the signal or the field that found it.
+pub(super) fn investigate_report(
+    entities: Vec<huntsman_recon::entity::Entity>,
+) -> Result<LookupReport, LookupError> {
     let text =
         huntsman_recon::lookup_report::render(&entities, &[]).map_err(|message| LookupError {
             status: 500,
@@ -175,6 +177,20 @@ pub(super) fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
         outcomes: Vec::new(),
         scan: None,
         status: None,
+    })
+}
+
+/// `/api/investigate`: the `investigate` command over the text the page sends, as one report.
+pub(super) fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
+    investigate_report(investigate_entities(text))
+}
+
+/// The object `GET /api/research`, the MCP `research` tool and `research --json` answer with:
+/// the route and the adaptive search report. **Pure.**
+pub(super) fn research_json<T: serde::Serialize>(report: &T) -> serde_json::Value {
+    serde_json::json!({
+        "route": "adaptive_web_search",
+        "report": report,
     })
 }
 
@@ -266,10 +282,7 @@ pub(super) fn web_research(query: &str) -> Result<serde_json::Value, LookupError
         huntsman_recon::web_query::EngineSet::Default,
     )
     .map_err(|error| adapter_error(&error))?;
-    Ok(serde_json::json!({
-        "route": "adaptive_web_search",
-        "report": report,
-    }))
+    Ok(research_json(&report))
 }
 
 /// Mobile radar reads exactly the same Termux Wi-Fi cache as the CLI.

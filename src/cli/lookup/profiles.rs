@@ -627,8 +627,9 @@ pub(in crate::cli) fn takes_json(command: &str) -> bool {
     ScanKind::ALL.iter().any(|kind| kind.command() == command)
 }
 
-/// `args` without its `--json`, and whether it was there. A second `--json` is refused.
-fn take_json(args: &[String]) -> Result<(Vec<String>, bool), Error> {
+/// `args` without its `--json`, wherever it was, and whether it was there. A second `--json`
+/// is refused.
+pub(in crate::cli) fn take_json(args: &[String]) -> Result<(Vec<String>, bool), Error> {
     let mut rest = Vec::with_capacity(args.len());
     let mut json = false;
     for arg in args {
