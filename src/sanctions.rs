@@ -13,6 +13,8 @@
 //! whole listing kept verbatim as evidence (remarks, dates of birth, nationality, programmes) so
 //! it can be compared with what else is known.
 
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::entity::{Entity, EntityKind, Evidence, EvidenceProvenance, merge_by_uid, push_entity};
@@ -164,8 +166,47 @@ struct Listing {
 
 /// Whether `listed` carries every word of `query`. **Pure.**
 fn names_query(listed: &str, query: &[String]) -> bool {
-    let have = crate::textnorm::name_tokens(listed);
-    query.iter().all(|word| have.contains(word))
+    crate::textnorm::carries_name(listed, query)
+}
+
+/// A list as read for one name: the listings that may carry it (built from their rows), how
+/// many listings the copy holds in all, and what the outcome says about the copy. A list is
+/// read whole only for a name of no words.
+struct ListRead {
+    listings: Vec<Listing>,
+    /// The listings the copy holds, matching or not.
+    read: usize,
+    note: Option<String>,
+    current: bool,
+}
+
+/// Field `at` of a delimited `line`, trimmed: read in place while no quote precedes the field's
+/// end, else from the row split as the list's parser splits it. A row's identifier is read this
+/// way before the row is parsed, so a row that is not wanted is never split. **Pure.**
+fn field_of(line: &str, separator: char, at: usize) -> Cow<'_, str> {
+    let mut rest = line;
+    let mut index = 0;
+    loop {
+        let (field, after) = rest
+            .split_once(separator)
+            .map_or((rest, None), |(field, after)| (field, Some(after)));
+        if field.contains('"') {
+            break;
+        }
+        if index == at {
+            return Cow::Borrowed(field.trim());
+        }
+        let Some(after) = after else {
+            return Cow::Borrowed("");
+        };
+        rest = after;
+        index += 1;
+    }
+    Cow::Owned(
+        delimited_fields(line, separator)
+            .get(at)
+            .map_or_else(String::new, |field| field.trim().to_owned()),
+    )
 }
 
 /// Match `name` against every consulted list: the listings that carry it, and one outcome per
@@ -192,13 +233,18 @@ pub fn check(
     let mut entities = Vec::new();
     let mut outcomes = Vec::new();
     for (label, read) in [
-        (OFAC, read_ofac(transport, dir, now_unix)),
-        (UN, read_un(transport, dir, now_unix)),
-        (EU, read_eu(transport, dir, now_unix)),
+        (OFAC, read_ofac(transport, dir, &query, now_unix)),
+        (UN, read_un(transport, dir, &query, now_unix)),
+        (EU, read_eu(transport, dir, &query, now_unix)),
         (DFAT, read_dfat(transport, dir, now_unix)),
     ] {
         outcomes.push(match read {
-            Ok((listings, note, current)) => {
+            Ok(ListRead {
+                listings,
+                read,
+                note,
+                current,
+            }) => {
                 let found = record_matches(&listings, &query, label, scan_id, &mut entities);
                 let mut outcome = if !current {
                     // Retain every historical matching document, but neither a positive
@@ -216,7 +262,7 @@ pub fn check(
                 } else {
                     SourceExecutionOutcome::success(label, now_unix, found)
                 };
-                let mut detail = format!("{} listings read", listings.len());
+                let mut detail = format!("{read} listings read");
                 if let Some(note) = note {
                     detail.push_str("; ");
                     detail.push_str(&note);
@@ -299,7 +345,10 @@ fn copy_of(
 ) -> Result<(String, Option<String>, bool), Failure> {
     let (body, note, current) =
         copy_bytes_of(transport, dir, list, now_unix, || Ok(list.url.to_owned()))?;
-    Ok((String::from_utf8_lossy(&body).into_owned(), note, current))
+    // A copy that is UTF-8, as every list is, becomes text in place: nothing is copied.
+    let text = String::from_utf8(body)
+        .unwrap_or_else(|invalid| String::from_utf8_lossy(invalid.as_bytes()).into_owned());
+    Ok((text, note, current))
 }
 
 /// A list's copy (kept, or downloaded from the address `resolve` gives) as bytes, and what its
@@ -417,7 +466,7 @@ fn read_dfat(
     transport: &(dyn Transport + Send + Sync),
     dir: Option<&Path>,
     now_unix: u64,
-) -> Result<(Vec<Listing>, Option<String>, bool), Failure> {
+) -> Result<ListRead, Failure> {
     let (workbook, note, current) = copy_bytes_of(transport, dir, &DFAT_LIST, now_unix, || {
         dfat_workbook_url(transport, now_unix)
     })?;
@@ -437,7 +486,12 @@ fn read_dfat(
             format!("no listing could be read in {} rows", rows.len()),
         ));
     }
-    Ok((listings, note, current))
+    Ok(ListRead {
+        read: listings.len(),
+        listings,
+        note,
+        current,
+    })
 }
 
 /// Every listing in DFAT's workbook: its rows, which share the digits of their reference (the
@@ -522,12 +576,13 @@ fn parse_dfat(rows: &[Vec<String>]) -> Vec<Listing> {
         .collect()
 }
 
-/// OFAC's SDN rows joined with their aliases.
+/// OFAC's SDN rows that may carry `query`, joined with their aliases.
 fn read_ofac(
     transport: &(dyn Transport + Send + Sync),
     dir: Option<&Path>,
+    query: &[String],
     now_unix: u64,
-) -> Result<(Vec<Listing>, Option<String>, bool), crate::threat_feeds::Failure> {
+) -> Result<ListRead, crate::threat_feeds::Failure> {
     let (sdn, note, sdn_current) = copy_of(transport, dir, &OFAC_SDN, now_unix)?;
     // A missing alias table does not invalidate observed primary names, but it prevents
     // a complete negative verdict: the queried name might occur only in an alias.
@@ -539,8 +594,8 @@ fn read_ofac(
             false,
         ),
     };
-    let listings = parse_ofac(&sdn, &alt);
-    if listings.is_empty() {
+    let (listings, read) = parse_ofac(&sdn, &alt, query);
+    if read == 0 {
         return Err((
             SourceOutcomeKind::ProtocolDrift,
             format!("no SDN row could be read in {} bytes", sdn.len()),
@@ -551,41 +606,58 @@ fn read_ofac(
         .flatten()
         .collect::<Vec<_>>()
         .join("; ");
-    Ok((listings, Some(note), sdn_current && alt_current))
+    Ok(ListRead {
+        listings,
+        read,
+        note: Some(note),
+        current: sdn_current && alt_current,
+    })
 }
 
-/// The UN list's individuals and entities.
+/// The UN list's individuals and entities that may carry `query`.
 fn read_un(
     transport: &(dyn Transport + Send + Sync),
     dir: Option<&Path>,
+    query: &[String],
     now_unix: u64,
-) -> Result<(Vec<Listing>, Option<String>, bool), crate::threat_feeds::Failure> {
+) -> Result<ListRead, crate::threat_feeds::Failure> {
     let (xml, note, current) = copy_of(transport, dir, &UN_SC, now_unix)?;
-    let listings = parse_un(&xml);
-    if listings.is_empty() {
+    let (listings, read) = parse_un(&xml, query);
+    if read == 0 {
         return Err((
             SourceOutcomeKind::ProtocolDrift,
             format!("no listing could be read in {} bytes", xml.len()),
         ));
     }
-    Ok((listings, note, current))
+    Ok(ListRead {
+        listings,
+        read,
+        note,
+        current,
+    })
 }
 
-/// The EU list's subjects.
+/// The EU list's subjects that may carry `query`.
 fn read_eu(
     transport: &(dyn Transport + Send + Sync),
     dir: Option<&Path>,
+    query: &[String],
     now_unix: u64,
-) -> Result<(Vec<Listing>, Option<String>, bool), crate::threat_feeds::Failure> {
+) -> Result<ListRead, crate::threat_feeds::Failure> {
     let (csv, note, current) = copy_of(transport, dir, &EU_FSF, now_unix)?;
-    let listings = parse_eu(&csv);
-    if listings.is_empty() {
+    let (listings, read) = parse_eu(&csv, query);
+    if read == 0 {
         return Err((
             SourceOutcomeKind::ProtocolDrift,
             format!("no subject could be read in {} bytes", csv.len()),
         ));
     }
-    Ok((listings, note, current))
+    Ok(ListRead {
+        listings,
+        read,
+        note,
+        current,
+    })
 }
 
 /// The EU list's columns kept for the evidence, by header name, and the attribute each becomes.
@@ -608,20 +680,36 @@ const EU_FIELDS: [(&str, &str); 16] = [
     ("Identification_Remark", "identification"),
 ];
 
-/// Every subject on the EU list. The file holds one row per combination of a subject's names,
-/// addresses, birth dates, documents and citizenships, so rows are grouped by
-/// `Entity_LogicalId` and each value is kept once, in file order. **Pure.**
-fn parse_eu(csv: &str) -> Vec<Listing> {
+/// Every subject on the EU list that may carry `query` (every subject, for a `query` of no
+/// words), and how many subjects the list holds. The file holds one row per combination of a
+/// subject's names, addresses, birth dates, documents and citizenships, so rows are grouped by
+/// `Entity_LogicalId` and each value is kept once, in file order. A subject is built only when
+/// one of its rows can carry every word of `query` ([`crate::textnorm::carries_name`]), so the
+/// rows of every other subject are counted and never split. **Pure.**
+fn parse_eu(csv: &str, query: &[String]) -> (Vec<Listing>, usize) {
     let mut lines = csv.trim_start_matches('\u{feff}').lines();
     let Some(header) = lines.next() else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
     let header = delimited_fields(header, ';');
     let column = |name: &str| header.iter().position(|h| h == name);
     let (Some(id_at), Some(whole_at)) = (column("Entity_LogicalId"), column("NameAlias_WholeName"))
     else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
+    let mut read: HashSet<Cow<'_, str>> = HashSet::new();
+    let mut candidates: HashSet<Cow<'_, str>> = HashSet::new();
+    for line in lines.clone() {
+        let line = line.trim_end_matches('\r');
+        let id = field_of(line, ';', id_at);
+        if id.is_empty() {
+            continue;
+        }
+        if crate::textnorm::carries_name(line, query) {
+            candidates.insert(id.clone());
+        }
+        read.insert(id);
+    }
     let parts_at = [
         column("NameAlias_FirstName"),
         column("NameAlias_MiddleName"),
@@ -632,9 +720,13 @@ fn parse_eu(csv: &str) -> Vec<Listing> {
         .filter_map(|(name, key)| column(name).map(|at| (at, *key)))
         .collect();
     let mut order: Vec<String> = Vec::new();
-    let mut subjects: std::collections::HashMap<String, Listing> = std::collections::HashMap::new();
+    let mut subjects: HashMap<String, Listing> = HashMap::new();
     for line in lines {
-        let fields = delimited_fields(line.trim_end_matches('\r'), ';');
+        let line = line.trim_end_matches('\r');
+        if !candidates.contains(field_of(line, ';', id_at).as_ref()) {
+            continue;
+        }
+        let fields = delimited_fields(line, ';');
         if fields.len() != header.len() {
             continue;
         }
@@ -671,7 +763,7 @@ fn parse_eu(csv: &str) -> Vec<Listing> {
             }
         }
     }
-    order
+    let listings = order
         .into_iter()
         .filter_map(|id| subjects.remove(&id))
         .filter(|listing| !listing.names.is_empty())
@@ -692,7 +784,8 @@ fn parse_eu(csv: &str) -> Vec<Listing> {
             listing.url = format!("https://webgate.ec.europa.eu/fsd/fsf/public/files/csvFullSanctionsList_1_1/content#{reference}");
             listing
         })
-        .collect()
+        .collect();
+    (listings, read.len())
 }
 
 /// OFAC's "no value" marker.
@@ -702,13 +795,38 @@ fn ofac_value(field: &str) -> Option<String> {
 }
 
 /// Every SDN row (`ent_num, name, type, program, title, call sign, vessel type, tonnage, GRT,
-/// vessel flag, vessel owner, remarks`) with the aliases `ALT.CSV` lists under its number. A
-/// line that is not a full row (the file's trailing end-of-file byte) is skipped. **Pure.**
-fn parse_ofac(sdn: &str, alt: &str) -> Vec<Listing> {
-    let mut aliases: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
+/// vessel flag, vessel owner, remarks`) that may carry `query`, itself or in the aliases
+/// `ALT.CSV` lists under its number (every row, for a `query` of no words), with those aliases;
+/// and how many numbered rows the file holds. A row that cannot carry the name, and the alias
+/// rows of a number no row of which can, are counted and never split. A line that is not a
+/// full row (the file's trailing end-of-file byte) is skipped. **Pure.**
+fn parse_ofac(sdn: &str, alt: &str, query: &[String]) -> (Vec<Listing>, usize) {
+    let mut candidates: HashSet<Cow<'_, str>> = HashSet::new();
     for line in alt.lines() {
-        let fields = csv_fields(line.trim_end_matches('\r'));
+        let line = line.trim_end_matches('\r');
+        if crate::textnorm::carries_name(line, query) {
+            candidates.insert(field_of(line, ',', 0));
+        }
+    }
+    let mut read = 0;
+    for line in sdn.lines() {
+        let line = line.trim_end_matches('\r');
+        let number = field_of(line, ',', 0);
+        if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        read += 1;
+        if crate::textnorm::carries_name(line, query) {
+            candidates.insert(number);
+        }
+    }
+    let mut aliases: HashMap<String, Vec<String>> = HashMap::new();
+    for line in alt.lines() {
+        let line = line.trim_end_matches('\r');
+        if !candidates.contains(field_of(line, ',', 0).as_ref()) {
+            continue;
+        }
+        let fields = csv_fields(line);
         if let (Some(number), Some(name)) = (
             fields.first().and_then(|f| ofac_value(f)),
             fields.get(3).and_then(|f| ofac_value(f)),
@@ -732,7 +850,11 @@ fn parse_ofac(sdn: &str, alt: &str) -> Vec<Listing> {
     ];
     let mut listings = Vec::new();
     for line in sdn.lines() {
-        let fields = csv_fields(line.trim_end_matches('\r'));
+        let line = line.trim_end_matches('\r');
+        if !candidates.contains(field_of(line, ',', 0).as_ref()) {
+            continue;
+        }
+        let fields = csv_fields(line);
         if fields.len() < COLUMNS.len() {
             continue;
         }
@@ -755,15 +877,22 @@ fn parse_ofac(sdn: &str, alt: &str) -> Vec<Listing> {
             fields: kept,
         });
     }
-    listings
+    (listings, read)
 }
 
-/// Every individual and entity on the UN list: the name parts joined, every alias, and every
-/// field kept for the evidence. **Pure.**
-fn parse_un(xml: &str) -> Vec<Listing> {
+/// Every individual and entity on the UN list whose block may carry `query` (every one, for a
+/// `query` of no words): the name parts joined, every alias, and every field kept for the
+/// evidence; and how many blocks the list holds. A block that cannot carry the name is counted
+/// and never read. **Pure.**
+fn parse_un(xml: &str, query: &[String]) -> (Vec<Listing>, usize) {
     let mut listings = Vec::new();
+    let mut read = 0;
     for (element, kind) in [("INDIVIDUAL", "individual"), ("ENTITY", "entity")] {
         for block in xml_blocks(xml, element) {
+            read += 1;
+            if !block_carries(block, query) {
+                continue;
+            }
             let parts: Vec<String> = ["FIRST_NAME", "SECOND_NAME", "THIRD_NAME", "FOURTH_NAME"]
                 .iter()
                 .filter_map(|tag| xml_tag_values(block, tag).into_iter().next())
@@ -825,7 +954,17 @@ fn parse_un(xml: &str) -> Vec<Listing> {
             });
         }
     }
-    listings
+    (listings, read)
+}
+
+/// Whether a block of the UN list may carry every word of `query`: asked of its text in place,
+/// unescaped first when a character reference in it could spell a letter. **Pure.**
+fn block_carries(block: &str, query: &[String]) -> bool {
+    if block.contains("&#") {
+        crate::textnorm::carries_name(&xml_unescape(block), query)
+    } else {
+        crate::textnorm::carries_name(block, query)
+    }
 }
 
 #[cfg(test)]

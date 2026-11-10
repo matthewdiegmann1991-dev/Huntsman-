@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::*;
 use crate::test_support::RoutedTransport;
 
@@ -287,6 +289,78 @@ fn the_eu_list_groups_a_subject_s_rows_and_matches_only_whole_words() {
         "{:?}",
         values(&bout)
     );
+}
+
+/// Each list builds only the listings whose rows may carry the name asked, counts every
+/// listing it holds, and finds for every name exactly what reading the whole list finds: a row
+/// whose identifier sits behind a quoted cell, a number quoted, or a name spelled with a
+/// character reference included.
+#[test]
+fn a_list_builds_only_the_listings_that_may_carry_the_name_and_counts_them_all() {
+    fn same_as_whole(
+        every: &[Listing],
+        held: usize,
+        parse: impl Fn(&[String]) -> (Vec<Listing>, usize),
+    ) {
+        for listing in every {
+            for name in &listing.names {
+                let query = crate::textnorm::name_tokens(name);
+                let (built, read) = parse(&query);
+                assert_eq!(read, held, "{name}: every listing is counted");
+                assert!(built.contains(listing), "{name}: {built:?}");
+                assert!(
+                    built.iter().all(|candidate| every.contains(candidate)),
+                    "{name}: a candidate is a whole listing"
+                );
+            }
+        }
+        let nobody = ["nobody".to_owned(), "here".to_owned()];
+        assert_eq!(parse(&nobody), (Vec::new(), held));
+    }
+    let (every_eu, eu_held) = parse_eu(EU_CSV, &[]);
+    let (every_ofac, ofac_held) = parse_ofac(SDN, ALT, &[]);
+    let (every_un, un_held) = parse_un(UN_XML, &[]);
+    assert_eq!((every_eu.len(), eu_held), (2, 2));
+    assert_eq!((every_ofac.len(), ofac_held), (3, 3));
+    assert_eq!((every_un.len(), un_held), (2, 2));
+    same_as_whole(&every_eu, eu_held, |query| parse_eu(EU_CSV, query));
+    same_as_whole(&every_ofac, ofac_held, |query| parse_ofac(SDN, ALT, query));
+    same_as_whole(&every_un, un_held, |query| parse_un(UN_XML, query));
+
+    // A quoted cell before the identifier, or a quoted identifier, sends the row to the splitter.
+    let quoted_date = EU_CSV.replace("07/11/2026;7200;", "\"07/11/2026\";\"7200\";");
+    assert_ne!(quoted_date, EU_CSV);
+    let badege = crate::textnorm::name_tokens("Eric Badege");
+    assert_eq!(parse_eu(&quoted_date, &badege), parse_eu(EU_CSV, &badege));
+    assert_eq!(parse_eu(&quoted_date, &[]), (every_eu.clone(), 2));
+    let quoted_number = SDN.replace("8279,", "\"8279\",");
+    let quoted_alias = ALT.replace("8279,", "\"8279\",");
+    let bout = crate::textnorm::name_tokens("Victor Butt");
+    assert_eq!(
+        parse_ofac(&quoted_number, &quoted_alias, &bout),
+        parse_ofac(SDN, ALT, &bout)
+    );
+    assert_eq!(parse_ofac(&quoted_number, &quoted_alias, &bout).0.len(), 1);
+    assert_eq!(
+        field_of("\"a;b\";7200;x", ';', 1).as_ref(),
+        "7200",
+        "a quoted cell holding the separator"
+    );
+    assert_eq!(field_of("a;b", ';', 5).as_ref(), "");
+    assert!(matches!(
+        field_of("a; 7200 ;x", ';', 1),
+        Cow::Borrowed("7200")
+    ));
+
+    // A name spelled with a character reference is matched as the letter it spells.
+    let referenced = UN_XML.replace("<FIRST_NAME>ERIC<", "<FIRST_NAME>&#201;RIC<");
+    assert_ne!(referenced, UN_XML);
+    let eric = crate::textnorm::name_tokens("Éric Badege");
+    let (built, read) = parse_un(&referenced, &eric);
+    assert_eq!(read, 2);
+    assert_eq!(built.len(), 1, "{built:?}");
+    assert_eq!(built[0].names[0], "ÉRIC BADEGE");
+    assert!(parse_un(&referenced, &badege).0.is_empty());
 }
 
 #[test]

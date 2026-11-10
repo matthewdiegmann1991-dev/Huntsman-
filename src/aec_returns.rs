@@ -420,7 +420,9 @@ fn match_table(
             continue;
         }
         rows += 1;
-        if found == MAX_MATCHES {
+        // A row is split only when a cell of it may satisfy the criterion; a table none of
+        // whose columns is looked in is read for its count alone.
+        if found == MAX_MATCHES || names.is_empty() || !may_match(line, criterion) {
             continue;
         }
         let cells = csv_fields(line);
@@ -473,8 +475,20 @@ fn match_table(
 
 /// Whether `listed` carries every word of `query`. **Pure.**
 fn names_query(listed: &str, query: &[String]) -> bool {
-    let have = crate::textnorm::name_tokens(listed);
-    query.iter().all(|word| have.contains(word))
+    crate::textnorm::carries_name(listed, query)
+}
+
+/// Whether some cell of the row `line` may satisfy `criterion`, asked of the row before it is
+/// split: a name when every word is a token of the row, a number when its digits run within
+/// the row's. Necessary, never sufficient: a row that may is split and its cells asked. **Pure.**
+fn may_match(line: &str, criterion: &Matcher) -> bool {
+    match criterion {
+        Matcher::Name(query) => crate::textnorm::carries_name(line, query),
+        Matcher::Id(digits) => {
+            let row_digits: String = line.chars().filter(char::is_ascii_digit).collect();
+            row_digits.contains(digits.as_str())
+        }
+    }
 }
 
 /// `text` as a key fragment: lowercase, runs of anything but letters and digits as one `-`.
