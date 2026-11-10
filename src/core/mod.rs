@@ -9,5 +9,5 @@ pub use crate::{
     exit, fsio, geohash, html_text, json, lookup_args, md5, netblock, network_selector, oui,
     oui_ieee, pattern, phone_intl, postcode_au, radar, redact, scan_batch, sha256, source_profile,
     spf, stage, stdio_failure, tags, termination, textnorm, timefmt, tlsrpt, union_find,
-    username_variants, validation, value_syntax, x509, yaml_lite,
+    username_variants, validation, value_syntax, workbook, x509, yaml_lite, zip_read,
 };

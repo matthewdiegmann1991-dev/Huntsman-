@@ -1,6 +1,8 @@
 //! Consolidated sanctions lists, read offline from copies kept on the device: the US Treasury
 //! OFAC Specially Designated Nationals list (with its alias table), the UN Security Council
-//! Consolidated List and the EU Financial Sanctions consolidated list.
+//! Consolidated List, the EU Financial Sanctions consolidated list and DFAT's Consolidated List
+//! of the persons and entities subject to Australian sanctions law (the autonomous sanctions and
+//! the UN Security Council sanctions Australia implements).
 //!
 //! Each list is one keyless public download, kept in the list directory and downloaded again
 //! once a day through the same download-and-keep machinery as the threat feeds
@@ -16,7 +18,10 @@ use std::path::{Path, PathBuf};
 use crate::entity::{Entity, EntityKind, Evidence, EvidenceProvenance, merge_by_uid, push_entity};
 use crate::http::Transport;
 use crate::source_outcome::{SourceExecutionOutcome, SourceOutcomeKind};
-use crate::threat_feeds::{CachedList, csv_fields, delimited_fields, load};
+use crate::textnorm::{xml_blocks, xml_tag_values, xml_unescape};
+use crate::threat_feeds::{
+    CachedList, Failure, MAX_FEED_BYTES, csv_fields, delimited_fields, load_with,
+};
 
 /// The module that selects every sanctions list.
 pub const SOURCE: &str = "sanctions";
@@ -26,6 +31,8 @@ pub const OFAC: &str = "sanctions.ofac_sdn";
 pub const UN: &str = "sanctions.un_sc";
 /// The EU Financial Sanctions consolidated list's outcome label.
 pub const EU: &str = "sanctions.eu_fsf";
+/// DFAT's Consolidated List's outcome label: Australia's sanctions.
+pub const DFAT: &str = "sanctions.dfat";
 
 /// A name match on a sanctions list: a strong lead, below a confirmed identity.
 const LISTED_CONFIDENCE: f64 = 0.6;
@@ -64,6 +71,44 @@ const UN_SC: CachedList = CachedList {
     max_age: MAX_AGE,
     xml_root: Some("CONSOLIDATED_LIST"),
 };
+/// The page DFAT publishes its Consolidated List from. The list is a workbook the page links
+/// under a path that has moved, so the link is read from the page when a download is due, and
+/// the listings are keyed by their reference on this page.
+const DFAT_PAGE: &str =
+    "https://www.dfat.gov.au/international-relations/security/sanctions/consolidated-list";
+/// DFAT's Consolidated List: one workbook row per name of each listed person, entity or vessel
+/// (its primary name, each alias, its name in its original script), the rows of one listing
+/// sharing the digits of their reference (`2298`, `2298a`, `2298b`).
+const DFAT_LIST: CachedList = CachedList {
+    id: "sanctions-dfat-consolidated.xlsx",
+    source: DFAT,
+    url: DFAT_PAGE,
+    max_age: MAX_AGE,
+    xml_root: None,
+};
+/// The column of DFAT's workbook that holds each name.
+const DFAT_NAME: &str = "Name of Individual or Entity";
+/// The column that marks a row as a primary name or an alias.
+const DFAT_NAME_TYPE: &str = "Name Type";
+/// The column that groups a listing's rows.
+const DFAT_REFERENCE: &str = "Reference";
+/// The workbook's columns kept for the evidence, by header, and the attribute each becomes; a
+/// column the workbook does not carry is left out.
+const DFAT_FIELDS: [(&str, &str); 13] = [
+    ("Reference", "reference"),
+    ("Type", "type"),
+    ("Name Type", "name_type"),
+    ("Alias Strength", "alias_strength"),
+    ("Date of Birth", "date_of_birth"),
+    ("Place of Birth", "place_of_birth"),
+    ("Citizenship", "citizenship"),
+    ("Address", "address"),
+    ("Additional Information", "additional_information"),
+    ("Listing Information", "listing_information"),
+    ("IMO Number", "imo_number"),
+    ("Committees", "committees"),
+    ("Control Date", "control_date"),
+];
 
 /// Where the lists come from and where their copies are kept: a transport able to carry the
 /// largest list, and the directory the copies live in. [`Lists::none`] consults no list.
@@ -137,6 +182,7 @@ pub fn check(
         (OFAC, read_ofac(transport, dir, now_unix)),
         (UN, read_un(transport, dir, now_unix)),
         (EU, read_eu(transport, dir, now_unix)),
+        (DFAT, read_dfat(transport, dir, now_unix)),
     ] {
         outcomes.push(match read {
             Ok((listings, note, current)) => {
@@ -226,18 +272,33 @@ const fn list_title(label: &str) -> &'static str {
     match label.as_bytes() {
         b"sanctions.ofac_sdn" => "OFAC Specially Designated Nationals list",
         b"sanctions.eu_fsf" => "EU Financial Sanctions consolidated list",
+        b"sanctions.dfat" => "DFAT Consolidated List (Australian sanctions)",
         _ => "UN Security Council Consolidated List",
     }
 }
 
-/// A list's copy (kept or downloaded) and what its outcome should say about the copy.
+/// A list's copy (kept or downloaded) as text, and what its outcome should say about the copy.
 fn copy_of(
     transport: &(dyn Transport + Send + Sync),
     dir: Option<&Path>,
     list: &CachedList,
     now_unix: u64,
-) -> Result<(String, Option<String>, bool), crate::threat_feeds::Failure> {
-    let copy = load(transport, dir, list, now_unix)?;
+) -> Result<(String, Option<String>, bool), Failure> {
+    let (body, note, current) =
+        copy_bytes_of(transport, dir, list, now_unix, || Ok(list.url.to_owned()))?;
+    Ok((String::from_utf8_lossy(&body).into_owned(), note, current))
+}
+
+/// A list's copy (kept, or downloaded from the address `resolve` gives) as bytes, and what its
+/// outcome should say about the copy.
+fn copy_bytes_of(
+    transport: &(dyn Transport + Send + Sync),
+    dir: Option<&Path>,
+    list: &CachedList,
+    now_unix: u64,
+    resolve: impl FnOnce() -> Result<String, Failure>,
+) -> Result<(Vec<u8>, Option<String>, bool), Failure> {
+    let copy = load_with(transport, dir, list, now_unix, resolve)?;
     let current = copy.current_for(now_unix, list.max_age);
     let age = now_unix.saturating_sub(copy.fetched);
     let mut note = format!(
@@ -253,11 +314,199 @@ fn copy_of(
         note.push_str("; ");
         note.push_str(&extra);
     }
-    Ok((
-        String::from_utf8_lossy(&copy.body).into_owned(),
-        Some(note),
-        current,
-    ))
+    Ok((copy.body, Some(note), current))
+}
+
+/// The address of the workbook DFAT's page links: the first `href` to an `.xlsx` whose path
+/// names the consolidated list, made absolute. The page is asked for only when a download is
+/// due.
+fn dfat_workbook_url(
+    transport: &(dyn Transport + Send + Sync),
+    now_unix: u64,
+) -> Result<String, Failure> {
+    let request =
+        crate::http::Request::get(DFAT_PAGE).with_timeout(crate::threat_feeds::FEED_TIMEOUT);
+    let fetched = crate::fetch::fetch(
+        transport,
+        request,
+        None,
+        &crate::fetch::FetchOptions::default(),
+        DFAT,
+        now_unix,
+    )
+    .map_err(|error| (SourceOutcomeKind::RefusedBeforeSending, error.to_string()))?;
+    let page = match fetched.response {
+        Some(response) if response.status == 200 => {
+            String::from_utf8_lossy(&response.body).into_owned()
+        }
+        Some(response) => {
+            return Err((
+                fetched.outcome.kind,
+                format!("the list page answered HTTP {}", response.status),
+            ));
+        }
+        None => return Err((fetched.outcome.kind, "the list page gave no answer".into())),
+    };
+    workbook_link(&page).ok_or_else(|| {
+        (
+            SourceOutcomeKind::ProtocolDrift,
+            format!(
+                "the DFAT page ({} bytes) links no consolidated-list workbook",
+                page.len()
+            ),
+        )
+    })
+}
+
+/// The first `href` in `page` to an `.xlsx` whose path names the consolidated list, absolute
+/// against the DFAT site. **Pure.**
+fn workbook_link(page: &str) -> Option<String> {
+    let mut rest = page;
+    while let Some(at) = rest.find("href=") {
+        rest = &rest[at + 5..];
+        let quote = rest.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            continue;
+        }
+        let value = &rest[1..];
+        let Some(end) = value.find(quote) else {
+            break;
+        };
+        let href = xml_unescape(&value[..end]);
+        rest = &value[end..];
+        let path = href
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let workbook = std::path::Path::new(&path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("xlsx"));
+        if workbook && path.contains("consolidated") {
+            return Some(
+                if href.starts_with("https://") || href.starts_with("http://") {
+                    href
+                } else if let Some(rest) = href.strip_prefix("//") {
+                    format!("https://{rest}")
+                } else if href.starts_with('/') {
+                    format!("https://www.dfat.gov.au{href}")
+                } else {
+                    format!("https://www.dfat.gov.au/{href}")
+                },
+            );
+        }
+    }
+    None
+}
+
+/// DFAT's listings: the workbook's rows grouped by reference.
+fn read_dfat(
+    transport: &(dyn Transport + Send + Sync),
+    dir: Option<&Path>,
+    now_unix: u64,
+) -> Result<(Vec<Listing>, Option<String>, bool), Failure> {
+    let (workbook, note, current) = copy_bytes_of(transport, dir, &DFAT_LIST, now_unix, || {
+        dfat_workbook_url(transport, now_unix)
+    })?;
+    let rows = crate::workbook::rows(&workbook, MAX_FEED_BYTES).map_err(|why| {
+        (
+            SourceOutcomeKind::ProtocolDrift,
+            format!(
+                "the workbook ({} bytes) could not be read: {why}",
+                workbook.len()
+            ),
+        )
+    })?;
+    let listings = parse_dfat(&rows);
+    if listings.is_empty() {
+        return Err((
+            SourceOutcomeKind::ProtocolDrift,
+            format!("no listing could be read in {} rows", rows.len()),
+        ));
+    }
+    Ok((listings, note, current))
+}
+
+/// Every listing in DFAT's workbook: its rows, which share the digits of their reference (the
+/// primary name's `2298`, an alias's `2298a`), give the primary name first (the row whose name
+/// type says so) and every other name (an alias, the name in its original script) as an alias,
+/// and the fields of the primary row are kept for the evidence. The header row is the first
+/// that names the name column, wherever any title rows above it end. **Pure.**
+fn parse_dfat(rows: &[Vec<String>]) -> Vec<Listing> {
+    let header_at = rows.iter().position(|row| {
+        row.iter()
+            .any(|cell| cell.trim().eq_ignore_ascii_case(DFAT_NAME))
+    });
+    let Some(header_at) = header_at else {
+        return Vec::new();
+    };
+    let column = |title: &str| {
+        rows[header_at]
+            .iter()
+            .position(|cell| cell.trim().eq_ignore_ascii_case(title))
+    };
+    let Some(name_at) = column(DFAT_NAME) else {
+        return Vec::new();
+    };
+    let kind_at = column(DFAT_NAME_TYPE);
+    let reference_at = column(DFAT_REFERENCE);
+    let fields: Vec<(usize, &'static str)> = DFAT_FIELDS
+        .iter()
+        .filter_map(|(title, attr)| column(title).map(|at| (at, *attr)))
+        .collect();
+    let cell = |row: &[String], at: usize| row.get(at).map_or("", |c| c.trim()).to_owned();
+    let mut order: Vec<String> = Vec::new();
+    let mut listings: std::collections::BTreeMap<String, (Listing, bool)> =
+        std::collections::BTreeMap::new();
+    for row in &rows[header_at + 1..] {
+        let name = cell(row, name_at);
+        if name.is_empty() {
+            continue;
+        }
+        let reference = reference_at
+            .map(|at| cell(row, at))
+            .filter(|reference| !reference.is_empty())
+            .unwrap_or_else(|| name.clone());
+        // `2298a` is an alias row of listing `2298`.
+        let reference = reference
+            .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+            .to_owned();
+        let primary = kind_at.is_none_or(|at| {
+            let kind = cell(row, at).to_ascii_lowercase();
+            kind.is_empty() || kind.starts_with("primary")
+        });
+        let row_fields: Vec<(&'static str, String)> = fields
+            .iter()
+            .map(|(at, attr)| (*attr, cell(row, *at)))
+            .filter(|(_, value)| !value.is_empty())
+            .collect();
+        let entry = listings.entry(reference.clone()).or_insert_with(|| {
+            order.push(reference.clone());
+            (
+                Listing {
+                    url: format!("{DFAT_PAGE}#{reference}"),
+                    names: Vec::new(),
+                    fields: Vec::new(),
+                },
+                false,
+            )
+        });
+        let (listing, has_primary) = entry;
+        if primary && !*has_primary {
+            listing.names.insert(0, name);
+            listing.fields = row_fields;
+            *has_primary = true;
+        } else {
+            if listing.fields.is_empty() {
+                listing.fields = row_fields;
+            }
+            listing.names.push(name);
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|reference| listings.remove(&reference).map(|(listing, _)| listing))
+        .collect()
 }
 
 /// OFAC's SDN rows joined with their aliases.
@@ -496,102 +745,26 @@ fn parse_ofac(sdn: &str, alt: &str) -> Vec<Listing> {
     listings
 }
 
-/// The text of every `<tag>…</tag>` in `block`, unescaped, in order. **Pure.**
-fn tag_values(block: &str, tag: &str) -> Vec<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let mut values = Vec::new();
-    let mut rest = block;
-    while let Some(start) = rest.find(&open) {
-        let after = &rest[start + open.len()..];
-        let Some(end) = after.find(&close) else {
-            break;
-        };
-        let value = unescape(after[..end].trim());
-        if !value.is_empty() {
-            values.push(value);
-        }
-        rest = &after[end + close.len()..];
-    }
-    values
-}
-
-/// XML's five named entities and decimal or hexadecimal character references. **Pure.**
-fn unescape(text: &str) -> String {
-    if !text.contains('&') {
-        return text.to_owned();
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find('&') {
-        out.push_str(&rest[..at]);
-        let tail = &rest[at..];
-        let Some(end) = tail.find(';').filter(|end| *end <= 10) else {
-            out.push('&');
-            rest = &tail[1..];
-            continue;
-        };
-        let entity = &tail[1..end];
-        let decoded = match entity {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            _ => entity
-                .strip_prefix("#x")
-                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-                .or_else(|| entity.strip_prefix('#').and_then(|dec| dec.parse().ok()))
-                .and_then(char::from_u32),
-        };
-        if let Some(c) = decoded {
-            out.push(c);
-            rest = &tail[end + 1..];
-        } else {
-            out.push('&');
-            rest = &tail[1..];
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-/// The `<element>…</element>` blocks of `xml`, in order. **Pure.**
-fn blocks<'a>(xml: &'a str, element: &str) -> Vec<&'a str> {
-    let open = format!("<{element}>");
-    let close = format!("</{element}>");
-    let mut found = Vec::new();
-    let mut rest = xml;
-    while let Some(start) = rest.find(&open) {
-        let after = &rest[start + open.len()..];
-        let Some(end) = after.find(&close) else {
-            break;
-        };
-        found.push(&after[..end]);
-        rest = &after[end + close.len()..];
-    }
-    found
-}
-
 /// Every individual and entity on the UN list: the name parts joined, every alias, and every
 /// field kept for the evidence. **Pure.**
 fn parse_un(xml: &str) -> Vec<Listing> {
     let mut listings = Vec::new();
     for (element, kind) in [("INDIVIDUAL", "individual"), ("ENTITY", "entity")] {
-        for block in blocks(xml, element) {
+        for block in xml_blocks(xml, element) {
             let parts: Vec<String> = ["FIRST_NAME", "SECOND_NAME", "THIRD_NAME", "FOURTH_NAME"]
                 .iter()
-                .filter_map(|tag| tag_values(block, tag).into_iter().next())
+                .filter_map(|tag| xml_tag_values(block, tag).into_iter().next())
                 .collect();
-            let Some(reference) = tag_values(block, "REFERENCE_NUMBER").into_iter().next() else {
+            let Some(reference) = xml_tag_values(block, "REFERENCE_NUMBER").into_iter().next()
+            else {
                 continue;
             };
             if parts.is_empty() {
                 continue;
             }
             let mut names = vec![parts.join(" ")];
-            names.extend(tag_values(block, "ALIAS_NAME"));
-            names.extend(tag_values(block, "NAME_ORIGINAL_SCRIPT"));
+            names.extend(xml_tag_values(block, "ALIAS_NAME"));
+            names.extend(xml_tag_values(block, "NAME_ORIGINAL_SCRIPT"));
             let mut fields: Vec<(&'static str, String)> = vec![
                 ("listing_type", kind.to_owned()),
                 ("reference_number", reference.clone()),
@@ -603,7 +776,7 @@ fn parse_un(xml: &str) -> Vec<Listing> {
                 ("comments", "COMMENTS1"),
                 ("interpol_link", "INTERPOL_LINK"),
             ] {
-                for value in tag_values(block, tag) {
+                for value in xml_tag_values(block, tag) {
                     fields.push((key, value));
                 }
             }
@@ -612,22 +785,22 @@ fn parse_un(xml: &str) -> Vec<Listing> {
                 ("designation", "DESIGNATION"),
                 ("title", "TITLE"),
             ] {
-                for inner in blocks(block, container) {
-                    for value in tag_values(inner, "VALUE") {
+                for inner in xml_blocks(block, container) {
+                    for value in xml_tag_values(inner, "VALUE") {
                         fields.push((key, value));
                     }
                 }
             }
-            for birth in blocks(block, "INDIVIDUAL_DATE_OF_BIRTH") {
+            for birth in xml_blocks(block, "INDIVIDUAL_DATE_OF_BIRTH") {
                 for tag in ["DATE", "YEAR", "FROM_YEAR", "TO_YEAR"] {
-                    for value in tag_values(birth, tag) {
+                    for value in xml_tag_values(birth, tag) {
                         fields.push(("date_of_birth", value));
                     }
                 }
             }
-            for place in blocks(block, "INDIVIDUAL_PLACE_OF_BIRTH") {
+            for place in xml_blocks(block, "INDIVIDUAL_PLACE_OF_BIRTH") {
                 for tag in ["CITY", "STATE_PROVINCE", "COUNTRY"] {
-                    for value in tag_values(place, tag) {
+                    for value in xml_tag_values(place, tag) {
                         fields.push(("place_of_birth", value));
                     }
                 }

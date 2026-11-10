@@ -571,6 +571,19 @@ pub(crate) fn load(
     feed: &CachedList,
     now_unix: u64,
 ) -> Result<Copy, Failure> {
+    load_with(transport, dir, feed, now_unix, || Ok(feed.url.to_owned()))
+}
+
+/// [`load`], the download, when one is needed, fetched from the address `resolve` gives rather
+/// than the feed's own: a list its publisher links from a page under a path that moves. The
+/// address is asked for only when the kept copy is too old or missing.
+pub(crate) fn load_with(
+    transport: &(dyn Transport + Send + Sync),
+    dir: Option<&Path>,
+    feed: &CachedList,
+    now_unix: u64,
+    resolve: impl FnOnce() -> Result<String, Failure>,
+) -> Result<Copy, Failure> {
     let path = dir.map(|dir| dir.join(feed.id));
     // Preserve the complete pre-upgrade cache, even if it is HTML or cannot be parsed,
     // before a refresh can replace it. Repeat reads verify the same immutable bytes.
@@ -607,7 +620,22 @@ pub(crate) fn load(
             });
         }
     }
-    match download(transport, dir, feed, now_unix) {
+    let url = match resolve() {
+        Ok(url) => url,
+        Err((kind, why)) => match kept {
+            Some((body, fetched)) => {
+                return Ok(Copy {
+                    body,
+                    fetched,
+                    date: kept_date,
+                    downloaded: false,
+                    note: Some(format!("could not be downloaded again ({why})")),
+                });
+            }
+            None => return Err((kind, why)),
+        },
+    };
+    match download(transport, dir, feed, &url, now_unix) {
         Ok((body, updated)) => {
             let note = path
                 .and_then(|path| keep(&path, &body, updated).err())
@@ -751,9 +779,10 @@ fn download(
     transport: &(dyn Transport + Send + Sync),
     dir: Option<&Path>,
     feed: &CachedList,
+    url: &str,
     now_unix: u64,
 ) -> Result<(Vec<u8>, Option<u64>), Failure> {
-    let request = Request::get(feed.url).with_timeout(FEED_TIMEOUT);
+    let request = Request::get(url).with_timeout(FEED_TIMEOUT);
     let fetched = fetch(
         transport,
         request,
@@ -770,7 +799,7 @@ fn download(
         let metadata = serde_json::json!({
             "source": feed.source,
             "request_method": "GET",
-            "request_url": feed.url,
+            "request_url": url,
             "final_url": fetched.final_url,
             "redirects": fetched.redirects,
             "response_status": response.status,

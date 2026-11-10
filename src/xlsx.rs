@@ -1,5 +1,7 @@
 //! Excel workbooks (`.xlsx`) with no dependency: Office Open XML parts in a stored ZIP.
 //!
+//! [`crate::workbook::rows`] reads a workbook back, or any workbook a publisher wrote.
+//!
 //! Spiderfoot exports a scan as a workbook with one sheet per data type. [`workbook`] writes
 //! that, and keeps every value whole. Each cell is an inline string, so a value is never read as
 //! a formula and needs no guard. A character XML cannot carry is written as Excel's own `_xHHHH_`

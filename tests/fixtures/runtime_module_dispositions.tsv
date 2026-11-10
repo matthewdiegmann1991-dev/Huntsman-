@@ -2,8 +2,8 @@ abuseipdb	adapter	AbuseIPDB check leg reached through ip_cli from ip, scan -k ip
 abn_lookup	adapter	keyed ABN Lookup source client reached through company_cli from the company command for an ABN or ACN
 account_leg	adapter	shared fetch and identity checks of the simple username legs (lobsters, chess_com, lichess, codeberg_user, devto_user, codewars_user, huggingface_user, hacker_news), reached through each of them
 acnc	adapter	ACNC charity register source client folded into a people scan as a candidate lead
-ae_id	leaf	UAE identifier validation (Emirates ID Luhn, UAE IBAN mod 97-10) behind the id command
 address_au	leaf	Australian address and phone normalization utility
+ae_id	leaf	UAE identifier validation (Emirates ID Luhn, UAE IBAN mod 97-10) behind the id command
 analysis	runtime	shared analysis fan-out
 api_leg	runtime	shared request path, key binding and status mapping of the free-tier API legs
 apk_intel	adapter	bounded offline APK archive intelligence reached by the shipped apk CLI and the serve upload path: ZIP inventory, binary AndroidManifest.xml, v1/v2/v3 signer certificates and DEX code URLs as source-labelled evidence and pivot entities
@@ -22,27 +22,21 @@ attack_reporting	leaf	hierarchy-aware ATT&CK coverage projection
 au_id	leaf	Australian identifier normalization
 autonomous_capability	diagnostic	policy negotiation prototype exercised by an external contract test; not connected to runtime dispatch
 base64	leaf	RFC 4648 base64 codec for CSP hashes, PKCE values and certificate DER
+base_rpc	adapter	keyless Base mainnet account observations through crypto_cli, scan and shared Web UI lookup; provenance retained without ownership attribution
 benchmark	diagnostic	benchmarking support
 ble_address	leaf	Bluetooth LE address typing by its bits, reached from network_cli
 ble_adv	adapter	Bluetooth LE advertisement decoder reached through radar ble-adv
 blockchain	adapter	blockchain.info Bitcoin address source client reached through crypto_cli
-base_rpc	adapter	keyless Base mainnet account observations through crypto_cli, scan and shared Web UI lookup; provenance retained without ownership attribution
-core	runtime	Stage 2 directory shim re-exporting L0/L3 leaves including network_selector
-eth_rpc	adapter	keyless Ethereum mainnet account observations through crypto_cli, scan and shared Web UI lookup over the shared evm_rpc core; provenance retained without ownership attribution
-evidence	runtime	Stage 2 directory shim re-exporting L1 evidence-contract leaves
-infrastructure	runtime	Stage 2 directory shim re-exporting L2 network-boundary leaves
-osint_synergy	runtime	source-join links between entities through shared DNS, IP and ASN attributes, each labelled not proven, reached through the analysis report, the offline analysis and /api/lookup
-security_toolkit	leaf	offline security-tool compatibility catalogue and single-digest SHA-256 audit reached through the security-tools catalog and sha256-audit CLI
-security_web	leaf	bounded anonymous HTTPS header inspection and operator-authorized path probes reached through the security-tools headers and paths CLI
-solana_rpc	adapter	keyless Solana mainnet-beta account observations through crypto_cli, scan and shared Web UI lookup: genesis-gated read-only batch, bounded SPL token, mint and multisig decode, recent transactions naming the address; provenance retained without ownership attribution
-evm_rpc	leaf	the one keyless EVM JSON-RPC account-observation core (batch request, fail-closed decode, exact-wei provenance) shared by base_rpc and eth_rpc
 bluesky_user	adapter	public Bluesky profile source client
-bt_company	leaf	Bluetooth SIG company identifier data, reached from rf::network_survey
-bt_uuid	leaf	Bluetooth SIG 16-bit UUID data, reached from ble_adv
 breach_hybrid	runtime	breach command gating and exposure order consumed by the CLI
 breach_record	leaf	what a breach record exposes, credentials held back, shared by the OathNet and DeHashed legs
+bt_company	leaf	Bluetooth SIG company identifier data, reached from rf::network_survey
+bt_uuid	leaf	Bluetooth SIG 16-bit UUID data, reached from ble_adv
 canonical	runtime	canonicalization for entities and provenance
+cell_radar	adapter	Termux API OS-cached cellular observations reached through radar cells command and typed RF results
 censys	adapter	Censys Platform v3 IP host lookup reached through the indicator legs when a PAT is configured
+certspotter	adapter	Cert Spotter certificate leg reached through domain_cli from domain, scan -k domain and /api/lookup, keyless or with its key
+chess_com	adapter	keyless Chess.com player lookup reached through username_cli from the username command and username scans, confirming the handle (case-insensitively) and surfacing its profile URL, title/country/join evidence and the display name and Twitch channel it self-declares as candidate leads
 circuit	leaf	bounded circuit/cache state
 ckan	adapter	CKAN source adapter
 claim_coverage	leaf	shadow-mode claim coverage accounting
@@ -50,24 +44,29 @@ claim_policy	leaf	provenance-rooted claim verification policy
 classifier	runtime	seed and indicator classification
 classify	runtime	response classification
 clock	leaf	the wall clock as Unix time, read through one module
+codeberg_user	adapter	keyless Codeberg (Forgejo) account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact login and surfacing its self-declared name, website and public e-mail as candidate leads
+codewars_user	adapter	keyless Codewars account lookup reached through username_cli from the username command and username scans, confirming the case-sensitive handle by its exact username and keeping its self-declared name, honor, rank and clan as evidence
 collection	runtime	provider-neutral execution/observation bridge
 collector	adapter	source-agnostic collection boundary
 commercial_readiness	diagnostic	machine-checkable capability proof and benchmark readiness reporting
 common_crawl	adapter	keyless Common Crawl index collector reached through domain_cli from domain, scan -k domain and /api/lookup; reads up to 3 crawled pages by WARC byte range for historical contacts
 community	runtime	graph community analysis through intelligence report
+company_cli	adapter	company query front-end reached from the company command, running asic_orgs and, for a name, gleif
 concurrent	runtime	runs a lookup's independent sources at once for exposure_cli and every email, username and name lookup
 confidence	runtime	entity confidence and verification helpers
+core	runtime	Stage 2 directory shim re-exporting L0/L3 leaves including network_selector
 coref	runtime	deterministic coreference clusters in investigation report
 correlator	runtime	correlation rules used by the runtime analysis spine
 coverage	runtime	provider coverage and incompleteness semantics
+crates_io	adapter	keyless crates.io account lookup reached through username_cli from the username command and username scans, confirming the handle by exact login and surfacing its GitHub profile and published crates' repository links
 credential_origin	leaf	authentication authority boundary
 cross_scan	runtime	bounded historical scan bridge analysis
-certspotter	adapter	Cert Spotter certificate leg reached through domain_cli from domain, scan -k domain and /api/lookup, keyless or with its key
 crtsh	adapter	Certificate Transparency source client
 crypto_cli	adapter	crypto lookup front-end reached from crypto, scan -k crypto and /api/lookup
 deadline	leaf	shared per-lookup request budget
 dehashed	adapter	DeHashed exact-match source client and lineage-safe collector
 dependency	runtime	module dependency and dispatch graph
+devto_user	adapter	keyless DEV Community account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact username and surfacing its self-declared name, website and linked GitHub and X/Twitter handles as candidate leads
 diagnostics	diagnostic	offline non-sensitive build runtime module and provider diagnostics
 differential	diagnostic	legacy no-regression entity comparator and oracle manifest checks
 directive_lock	diagnostic	canonical repository directive verification and mirror synchronization
@@ -76,7 +75,10 @@ dns	adapter	DNS source client
 dns_filter	adapter	filtering-resolver checks (AdGuard, CleanBrowsing, Cloudflare, Comodo, DNS for Family, OpenDNS, Quad9, Yandex) reached through domain_cli from domain, scan and /api/lookup
 dns_wire	leaf	RFC 1035 wire-form DNS query writer and answer reader behind dns_filter
 dnsbl	adapter	DNS blocklist checks (Spamhaus, SpamCop, UCEPROTECT, DroneBL, SURBL; retired SORBS is never asked) reached through ip_cli and domain_cli from ip, domain, scan and /api/lookup
+docker_hub_user	adapter	keyless Docker Hub account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact username or orgname and surfacing its display name, self-declared website and published image repository count as candidate leads
+docmeta	adapter	document XMP packet and PDF /Info metadata and embedded GPS source reached from the docmeta command
 doctor	diagnostic	doctor and fix checks and reversible repairs called by src/cli/doctor.rs
+docx	exporter	dependency-free Word document writer on xlsx's stored ZIP behind blueprint --docx and GET /api/blueprint?format=docx
 domain_cli	diagnostic	domain recon command front-end over crtsh and dns
 domain_lifecycle	diagnostic	offline imported domain-observation comparison
 domains	leaf	domain normalization and classification
@@ -84,16 +86,23 @@ dossier_view	runtime	read-only local dossier validation and rendering reached th
 duolingo	adapter	Duolingo account-by-email source reached through email_cli from email, scan -k email and /api/lookup
 egress	leaf	network egress policy
 email_cli	diagnostic	email enrichment command front-end
+embedded_metadata	runtime	one reading of a file's embedded metadata (exif + docmeta and the identifiers they find) shared by the web inspect view, investigate --file and reverse-image
 engineering_command	diagnostic	executable engineering command hierarchy and capability ownership
 entity	runtime	canonical entity and evidence model
 entity_reality	leaf	read-only bounded source-attributed saved-entity claim assessment reached through scan_api and scans reality
 environment	leaf	the process environment, read through one module
 error	leaf	shared error type
+eth_rpc	adapter	keyless Ethereum mainnet account observations through crypto_cli, scan and shared Web UI lookup over the shared evm_rpc core; provenance retained without ownership attribution
+evidence	runtime	Stage 2 directory shim re-exporting L1 evidence-contract leaves
 evidence_ancestry	runtime	independent-origin ancestry graph
 evidence_register	exporter	bounded offline evidence and semantic-delta export reachable through scan_api and scans CLI
+evm_rpc	leaf	the one keyless EVM JSON-RPC account-observation core (batch request, fail-closed decode, exact-wei provenance) shared by base_rpc and eth_rpc
+exa	adapter	Exa explicit query --exa source: fixed HTTPS origin, privately keyed, five lead-only web results
+exif	adapter	image EXIF metadata and GPS source reached from the exif command
 exit	leaf	process exit statuses shared by the binaries
 exposure	runtime	exposure analysis through intelligence report
 exposure_cli	diagnostic	breach exposure query command front-end
+federated_osint	adapter	indexed X recent-search clients reached through osint x and osint x-api; the bearer token is operator-owned and origin-bound
 fetch	leaf	guarded causal fetch boundary
 fetch_cli	diagnostic	low-level fetch command parsing
 fsio	leaf	bounded atomic file I/O
@@ -102,58 +111,60 @@ geohash	leaf	geohash codec
 geoint	leaf	GEOINT distance and parsing helpers
 gexf	exporter	GEXF graph output
 github_repos	adapter	bounded public GitHub repository evidence collector
-gitlab_user	adapter	keyless exact GitLab public user lookup through username_cli and scan, retaining only public profile fields and source provenance
 github_user	adapter	public GitHub profile source client
+gitlab_user	adapter	keyless exact GitLab public user lookup through username_cli and scan, retaining only public profile fields and source provenance
+gleif	adapter	GLEIF legal-entity source client reached through gleif_cli from the gleif command
+gleif_cli	adapter	gleif query front-end reached from the gleif command
 graph	runtime	shared deterministic graph model
 graph_exec	leaf	public evidence-gated DAG execution and checkpoint API; exported library surface awaiting scan-service integration
 gravatar	adapter	public Gravatar profile source client
 greynoise	adapter	GreyNoise Community leg reached through ip_cli from ip, scan -k ip and /api/lookup
+hacker_news	adapter	keyless Hacker News account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact case-sensitive id and surfacing its profile URL and the links self-published in its bio as candidate pivots
 hackertarget	adapter	HackerTarget leg reached through indicator_legs from ip, domain, scan and /api/lookup
 hibp	adapter	HIBP source adapter
 html_text	leaf	the one HTML-to-text reader (Markup tokenizer, html_to_text, attribute) shared by exposure_cli and wayback_cdx's archived-content reading
 http	leaf	single socket-opening transport boundary
 hudsonrock	adapter	Hudson Rock Cavalier keyless infostealer leg reached through indicator_legs from domain and email, scan and /api/lookup: domain-level aggregates, and one address's infostealer records kept as non-credential breach metadata (stealer families, compromise dates, service counts; never the stolen credentials, logins, machine name or host address)
+huggingface_user	adapter	keyless Hugging Face account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact user in the operator's case and surfacing its self-declared name, published-work counts and public organisation memberships as candidate leads
 hunter	adapter	Hunter domain-search leg reached through domain_cli from domain, scan -k domain and /api/lookup when its key is set
+icij_offshore	adapter	keyless ICIJ Offshore Leaks reconciliation client folded into a people scan as a lead (nodes kept only when their name carries every word of the person's name; each a Document keyed by node URL)
 identity	leaf	legacy/simple person record resolution helper
 identity_resolution	leaf	conservative merge decision policy
 indicator_legs	runtime	indicator-source runner reached through ip_cli and domain_cli from ip, domain, scan and /api/lookup
 indicator_sources	adapter	indicator-source registry run by indicator_legs for ip and domain lookups
+infrastructure	runtime	Stage 2 directory shim re-exporting L2 network-boundary leaves
 intelligence	runtime	aggregated intelligence report
 internetdb	adapter	Shodan InternetDB leg reached through ip_cli from ip, scan -k ip and /api/lookup
 ip_cli	runtime	ip lookup front-end reached from ip, scan -k ip and /api/lookup
 ipinfo	adapter	IPinfo leg reached through indicator_legs from ip, scan and /api/lookup
 ipinfo_lite	adapter	IPinfo Lite country/ASN leg reached through indicator_legs from ip, scan and /api/lookup when HUNTSMAN_IPINFO_KEY is set
 ipqs	adapter	IPQualityScore IP leg reached through indicator_legs from ip, scan -k ip and /api/lookup when its key is set
+isc	adapter	Internet Storm Center leg reached through indicator_legs from ip, scan and /api/lookup
 itunes	adapter	Apple iTunes Search source client reached through itunes_cli from the itunes command
 itunes_cli	adapter	itunes keyword front-end reached from the itunes command
-isc	adapter	Internet Storm Center leg reached through indicator_legs from ip, scan and /api/lookup
 json	exporter	canonical JSON support
 key_import	adapter	Spiderfoot SpiderFoot.cfg and keys-file key import reached through serve's POST /api/settings/keys (Settings, Import API keys)
 keybase	adapter	public Keybase identity source client reached through username_cli from the username command and scan
 keys	leaf	credential file handling
-mastodon_user	adapter	public Mastodon account source client reached through username_cli from username, scan and /api/lookup
-tiktok_public_contact	adapter	keyless public TikTok bio contact client, reached from username_cli and bounded by same guarded transport
-web	runtime	Stage 2 directory shim re-exporting serve/API listener leaves
-wikidata	adapter	Wikidata entity source client reached through wikidata_cli from the wikidata command and folded into a people scan as a candidate lead
-wikidata_cli	adapter	wikidata query front-end reached from the wikidata command
-gleif	adapter	GLEIF legal-entity source client reached through gleif_cli from the gleif command
-gleif_cli	adapter	gleif query front-end reached from the gleif command
-company_cli	adapter	company query front-end reached from the company command, running asic_orgs and, for a name, gleif
-wikipedia	adapter	public Wikipedia user-contributions source client reached through username_cli from the username command and scan
 kickbox	adapter	Kickbox disposable-domain leg reached through indicator_legs from email, scan -k email and /api/lookup
 leads	runtime	lead ranking through intelligence report
 leakix	adapter	LeakIX leg reached through indicator_legs from ip, domain, scan and /api/lookup when its key is set
 ledger	exporter	hash-chained verified-claim ledger
+lichess	adapter	keyless Lichess user lookup reached through username_cli from the username command and username scans, confirming the handle by its canonical id and surfacing its profile URL, title/time/game-count evidence and the real name and links it self-declares as candidate leads
 lineage	leaf	lineage-aware candidate resolution helper
+lobsters	adapter	keyless Lobsters account lookup reached through username_cli from the username command and username scans, confirming the handle (case-insensitively) and surfacing its profile URL, karma/join-date/bio as evidence and the GitHub handle it self-declares as a cross-platform candidate lead
 lookup_args	leaf	lookup option grammar shared by the front-ends
 lookup_modules	runtime	the modules each lookup kind asks, reached through scans run -m, sf -m, the New Scan page's modules and /api/settings
 lookup_report	leaf	shared text report of an identifier lookup
 lookup_save	exporter	shared unverified lookup ledger persistence
 maltiverse	adapter	Maltiverse leg reached through indicator_legs from ip, domain, scan and /api/lookup
+mastodon_user	adapter	public Mastodon account source client reached through username_cli from username, scan and /api/lookup
 mcp	runtime	Model Context Protocol stdio server reached from mcp; its lookup, people_discover and research tools run the adapters serve installs for /api/lookup, /api/people/discover and /api/research
 md5	leaf	MD5 primitive for protocols that require public MD5 identifiers
 meta_plan	runtime	meta-plan validation consumed by the runtime
+metadata_identifiers	runtime	the one place a metadata value becomes an entity, called by the exif and docmeta readers: identifiers in the fields people write, names in the fields that name someone, links and addresses only from fields a program writes, bounded per file
 metrics	runtime	shared scan metrics
+mitm_guard	adapter	Passive advisory Wi-Fi anomaly assessment reached from the shipped mitm audit CLI and radar Web UI; consumes OS-cached observations without claiming confirmed interception
 mnemonic	adapter	Mnemonic passive DNS leg reached through ip_cli and domain_cli from ip, domain, scan and /api/lookup
 module	runtime	provider economics metadata
 module_selection	runtime	the chosen modules carried on the transport, reached through every lookup a scan with modules runs
@@ -166,26 +177,23 @@ network_selector	runtime	network selector grammar (BSSID, SSID, coordinates, cel
 nominatim	adapter	OpenStreetMap Nominatim geocoding source client reached through nominatim_cli from the geocode command
 nominatim_cli	adapter	geocode forward/reverse front-end reached from the geocode command
 npm_author	adapter	keyless npm registry author lookup reached through username_cli from the username command and username scans, keeping the subject handle, only its own published contacts, and co-maintainer leads
-crates_io	adapter	keyless crates.io account lookup reached through username_cli from the username command and username scans, confirming the handle by exact login and surfacing its GitHub profile and published crates' repository links
-hacker_news	adapter	keyless Hacker News account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact case-sensitive id and surfacing its profile URL and the links self-published in its bio as candidate pivots
-docker_hub_user	adapter	keyless Docker Hub account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact username or orgname and surfacing its display name, self-declared website and published image repository count as candidate leads
-codeberg_user	adapter	keyless Codeberg (Forgejo) account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact login and surfacing its self-declared name, website and public e-mail as candidate leads
-devto_user	adapter	keyless DEV Community account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact username and surfacing its self-declared name, website and linked GitHub and X/Twitter handles as candidate leads
-huggingface_user	adapter	keyless Hugging Face account lookup reached through username_cli from the username command and username scans, confirming the handle by its exact user in the operator's case and surfacing its self-declared name, published-work counts and public organisation memberships as candidate leads
-codewars_user	adapter	keyless Codewars account lookup reached through username_cli from the username command and username scans, confirming the case-sensitive handle by its exact username and keeping its self-declared name, honor, rank and clan as evidence
-lobsters	adapter	keyless Lobsters account lookup reached through username_cli from the username command and username scans, confirming the handle (case-insensitively) and surfacing its profile URL, karma/join-date/bio as evidence and the GitHub handle it self-declares as a cross-platform candidate lead
-chess_com	adapter	keyless Chess.com player lookup reached through username_cli from the username command and username scans, confirming the handle (case-insensitively) and surfacing its profile URL, title/country/join evidence and the display name and Twitch channel it self-declares as candidate leads
-lichess	adapter	keyless Lichess user lookup reached through username_cli from the username command and username scans, confirming the handle by its canonical id and surfacing its profile URL, title/time/game-count evidence and the real name and links it self-declares as candidate leads
 numverify	adapter	Numverify leg reached through phone_cli from phone, scan -k phone and /api/lookup when its key is set
 oathnet	adapter	OathNet breach-search leg reached through exposure_cli from exposure, scan -k exposure and /api/lookup
+opencellid	adapter	OpenCelliD cell position leg reached through indicator_legs from network cell:MCC:MNC:AREA:CELL, and its cells-in-area search from network LAT,LON, scan and /api/lookup when its key is set
 openlibrary_author	adapter	keyless Open Library author-catalogue leg reached through people_discovery from people-discover and POST /api/people/discover; each catalogue entry is a separate unverified lead
 openpgp_keys	adapter	keys.openpgp.org verified key-identity source reached through email_cli from email, scan -k email and /api/lookup
 opensky	adapter	keyless OpenSky Network state-vector collector reached through nominatim_cli from geocode LAT,LON, scan -k geocode and /api/lookup place scans; one anonymous one-square-degree query, aircraft as transponder DeviceIds nearest first
 orthogonal_osint	runtime	bounded cross-source acquisition-gap analysis reached through the shared analysis spine and saved scan Web UI
+osint_area_risk	leaf	bounded public-event pressure estimator reached through osint area-risk and area-compare; never a safety guarantee
+osint_blueprint	exporter	OSINT app blueprint registry reached through the blueprint command, GET /api/blueprint and the About view's .docx download
+osint_casework	leaf	source-linked casework model reached through osint case; receipts, chronology and conflicts without identity attribution
+osint_matrix	runtime	canonical compiled source-file ownership matrix reached through osint matrix CLI and protected GET /api/osint/matrix; read-only and not evidence of live provider availability
+osint_synergy	runtime	source-join links between entities through shared DNS, IP and ASN attributes, each labelled not proven, reached through the analysis report, the offline analysis and /api/lookup
 otx	adapter	AlienVault OTX leg reached through indicator_legs from ip, domain, scan and /api/lookup
 oui	leaf	OUI lookup
 oui_ieee	leaf	IEEE OUI data
 pattern	leaf	linear-time regular expressions the Spiderfoot correlation rules run
+peeringdb	adapter	keyless PeeringDB network profile and Internet-exchange peering addresses reached through asn_cli from asn, scan and /api/lookup
 people_cli	diagnostic	ASIC people command front-end
 people_discovery	adapter	bounded source-scoped keyless people discovery through the existing web_query engines, reached from people-discover and POST /api/people/discover
 phishstats	adapter	PhishStats leg reached through indicator_legs from ip, scan and /api/lookup
@@ -196,36 +204,39 @@ pipeline_limits	leaf	shared bounded-execution limits
 pivot	runtime	graph pivot ranking
 planner	runtime	deterministic dispatch planning
 postcode_au	leaf	Australian postcode lookup/model
+privacy_audit	leaf	Bounded offline public-evidence privacy classifier reached through the privacy-audit CLI; no network activity, keys, or account ownership inference
 profiles	runtime	entity profiles through intelligence report
 proof	leaf	bounded proof-environment bookkeeping
 provider_credentials	leaf	provider credential completeness manifest
+public_osint	adapter	independent GDELT news, FBI notices and multi-engine public dossier front-end reached through public-osint and GET /api/lookup kinds news, notices, web and dossier
 pulsedive	adapter	Pulsedive leg reached through indicator_legs from ip, domain, scan and /api/lookup
 qld_traffic_cameras	adapter	Explicit QLDTraffic (keyed slot) and state-road GIS collectors reached only through the traffic-cameras CLI; nearby assets remain candidates
 radar	leaf	cross-sweep recurrence and follower detection over the private sweep log, reached through cli/radar.rs from radar track; its Bluetooth live tracker (BtRadarState) has no rootless Termux source and no caller yet
 rate_limit	leaf	sliding-window request budget each keyed provider with a stated rate shares process-wide (HIBP, DeHashed)
-recon	leaf	seed kinds the crtsh lookup and the domain recon front-ends share
-recursion	runtime	bounded fetch-expand-fetch crawl orchestration and termination
 rdap	adapter	keyless RDAP registration client reached through rdap_legs from domain, ip, scan and /api/lookup
 rdap_legs	runtime	RDAP registration leg of domain_cli and ip_cli, as sfp_whois
+recon	leaf	seed kinds the crtsh lookup and the domain recon front-ends share
+recursion	runtime	bounded fetch-expand-fetch crawl orchestration and termination
 redact	leaf	secret and location redaction
 relation	runtime	structural relation derivation
+research_route	runtime	subject-neutral offline research routing reached by the shipped research CLI and delegating to existing scan or adaptive keyless query paths
 resolve	leaf	conservative automatic merge application for supplied decisions
 retrieval_artifact	leaf	stable retrieval artifact identifier for provenance evidence
 reverse_image	adapter	offline exact-byte image fingerprint and explicitly opted-in provider image-search clients reached only by the reverse-image CLI; no web route
 rf	leaf	radio-frequency model utility
 rhinser_catalog	leaf	offline source-labelled Rhinser tool directory reached by the shipped rhinser catalogue CLI and Web UI catalogue endpoint
 rhinser_native	leaf	bounded read-only operator-provided NFC and Bluetooth observation fixtures reached by osint native and the loopback-only POST /api/rhinser/native, plus explicitly simulated demo
-rhinser_schema	leaf	candidate fixture-event entities from an inspected capture, reached by osint native --entities
 rhinser_nfc	leaf	bounded read-only APDU and NDEF byte inspection reached by the shipped rhinser NFC CLI
+rhinser_schema	leaf	candidate fixture-event entities from an inspected capture, reached by osint native --entities
 rhinser_tlv	leaf	bounded read-only BER-TLV tag inspection reached by osint nfc tlv, with no raw card values
 rhinser_workspace	leaf	bounded persistent local casework model reached by the shipped rhinser workspace CLI
 ripestat	adapter	RIPEstat prefix-overview, RPKI and routing-history legs reached through ip_cli, netblock_cli and routing_context from ip, netblock, scan and /api/lookup
-peeringdb	adapter	keyless PeeringDB network profile and Internet-exchange peering addresses reached through asn_cli from asn, scan and /api/lookup
 robtex	adapter	Robtex leg reached through indicator_legs from ip, domain, scan and /api/lookup
 roi	runtime	dispatch utility scoring
 routing_context	runtime	RPKI validation and routing-history evidence on the covering prefix, shared by ip_cli and netblock_cli from ip, netblock, scan and /api/lookup
 run_history	leaf	durable test-run history and regression verdict
 runtime	runtime	high-level investigation composition root
+sanctions	adapter	keyless OFAC SDN, UN Security Council and EU consolidated sanctions lists, kept on the device through the threat feeds' download-and-keep machinery and matched locally in a people scan (listings that carry every word of the name, as Document leads)
 scan_alert	runtime	whether a later scan of one target raises an alert over the earlier one, reached through scans alert, watch and the scan API
 scan_api	runtime	Spiderfoot-shaped saved-scan API router reached through scans and serve
 scan_artifact	exporter	versioned re-loadable scan results and correlation rerun
@@ -235,31 +246,32 @@ scan_coverage	runtime	read-only selected people-source coverage reached through 
 scan_export	exporter	Spiderfoot-layout CSV, TSV, Excel, JSON and GEXF exports of saved scans through scans export and the scan API
 scan_retention	runtime	which ended scans a retention pass may delete, reached through scans prune
 scan_route	runtime	deterministic lookup-front-end selector routing
-research_route	runtime	subject-neutral offline research routing reached by the shipped research CLI and delegating to existing scan or adaptive keyless query paths
 scan_search	runtime	Spiderfoot's search over one or every saved scan, reached through scans search, the scan API and the console
 scan_service	runtime	saved-scan runner reached through scans run and the scan API
 scan_store	runtime	private on-disk saved-scan store with crash recovery read by scans and the scan API
 scan_uncertainty	runtime	read-only evidence-derived scan uncertainty register used by the scan API and mobile Summary view
 search	diagnostic	local search utility
-icij_offshore	adapter	keyless ICIJ Offshore Leaks reconciliation client folded into a people scan as a lead (nodes kept only when their name carries every word of the person's name; each a Document keyed by node URL)
-sanctions	adapter	keyless OFAC SDN, UN Security Council and EU consolidated sanctions lists, kept on the device through the threat feeds' download-and-keep machinery and matched locally in a people scan (listings that carry every word of the name, as Document leads)
 sec_edgar	adapter	keyless SEC EDGAR full-text and submissions client folded into a people scan as a candidate lead (US issuers and insiders; LEI joins gleif, website into domain recon, addresses into geocode)
+security_toolkit	leaf	offline security-tool compatibility catalogue and single-digest SHA-256 audit reached through the security-tools catalog and sha256-audit CLI
+security_web	leaf	bounded anonymous HTTPS header inspection and operator-authorized path probes reached through the security-tools headers and paths CLI
 securitytrails	adapter	SecurityTrails subdomain leg reached through indicator_legs from domain, scan -k domain and /api/lookup when its key is set
 seeknow	adapter	SeekNow/See-Know source client
 seeknow_cli	diagnostic	SeekNow command front-end
 seeknow_collector	adapter	SeekNow lineage-safe collector
+serve_events	runtime	in-process event hub streamed to Web UI clients over the /api/events Server-Sent Events endpoint
 serve_probe	diagnostic	loopback probe of a running serve called by doctor and doctor serve
 service_defs	adapter	keyed-provider service registry
 session	exporter	auditable execution session
 sf_compat	diagnostic	SpiderFoot-compatible sf.py front end over saved scans
-sf_country	leaf	Spiderfoot's country table and sfp_countryname's readings behind sf_elements' COUNTRY_NAME elements
 sf_correlate	runtime	Spiderfoot 4.0 correlation rules run on every saved scan, scans rules and /api/correlationrules
+sf_country	leaf	Spiderfoot's country table and sfp_countryname's readings behind sf_elements' COUNTRY_NAME elements
 sf_elements	runtime	entities as typed Spiderfoot data elements for saved scans and sf -s rows
 sf_types	runtime	Spiderfoot 4.0 data-element type catalogue read by sf -T, scans and /api/eventtypes
 sha256	leaf	SHA-256 primitive
 shadow_assessment	leaf	shadow-mode claim assessment reporting
 shodan	adapter	Shodan host and DNS leg reached through indicator_legs from ip, domain, scan and /api/lookup when its key is set
 snake_graph	exporter	compact graph rendering
+solana_rpc	adapter	keyless Solana mainnet-beta account observations through crypto_cli, scan and shared Web UI lookup: genesis-gated read-only batch, bounded SPL token, mint and multisig decode, recent transactions naming the address; provenance retained without ownership attribution
 source_intel	adapter	offline APK URL candidate projection via source-intel CLI; existing APK parser owns extraction, no network or source verification
 source_outcome	runtime	causal provider outcome model
 source_profile	leaf	source classification table
@@ -272,13 +284,15 @@ stix	exporter	STIX output from admitted claims
 stolen_tax	adapter	key-gated credential exposure source client
 stopforumspam	adapter	StopForumSpam leg reached through indicator_legs from email, ip, scan and /api/lookup
 store	exporter	bounded atomic session persistence
+submd	adapter	sub.md passive subdomain leg reached through indicator_legs from domain, scan and /api/lookup
 tags	leaf	entity tag constants
+temporal_consistency	runtime	one source's impossible date orders through intelligence report
 termination	runtime	explicit bounded termination semantics
 textnorm	leaf	text normalization
 threat_feeds	adapter	downloaded threat feeds (abuse.ch, AlienVault, blocklist.de, botvrij, CINS, CleanTalk, CyberCrime-Tracker, Emerging Threats, GreenSnow, OpenPhish, PhishTank, Steven Black, Tor exits, VoIPBL, VXVault) kept in the state directory and reached through ip_cli, domain_cli and netblock_cli from ip, domain, netblock, scan and /api/lookup
 threatfox	adapter	ThreatFox IOC leg reached through indicator_legs from ip, domain, scan and /api/lookup when its key is set
+tiktok_public_contact	adapter	keyless public TikTok bio contact client, reached from username_cli and bounded by same guarded transport
 timefmt	leaf	timestamp parsing
-temporal_consistency	runtime	one source's impossible date orders through intelligence report
 timeline	runtime	timeline reconstruction through intelligence report
 tlsrpt	leaf	TLS-RPT parser
 trafficking_intel	diagnostic	offline evidence-linked indicator review and entity tree exercised only by tests; no shipped CLI, UI or live collection caller
@@ -291,31 +305,19 @@ validation	runtime	seed/entity validation
 value_syntax	leaf	dependency-free domain mailbox URL-host E.164 and TXT-record tag syntax primitives
 virustotal	adapter	VirusTotal leg reached through ip_cli and domain_cli when its key is set
 wayback_cdx	adapter	keyless Internet Archive CDX historical capture collector reached through domain_cli from domain, scan -k domain and /api/lookup; emits provenance-backed historical URL and hostname leads
-web_query	adapter	keyless web meta-search subset
+web	runtime	Stage 2 directory shim re-exporting serve/API listener leaves
 web_api_types	leaf	sensor report types (cell, Wi-Fi, track) re-exported for web_server
+web_query	adapter	keyless web meta-search subset
 web_server	runtime	embedded Web UI and read-only HTTP API
-serve_events	runtime	in-process event hub streamed to Web UI clients over the /api/events Server-Sent Events endpoint
 whoxy	adapter	Whoxy WHOIS leg reached through indicator_legs from domain, scan -k domain and /api/lookup when its key is set
-mitm_guard	adapter	Passive advisory Wi-Fi anomaly assessment reached from the shipped mitm audit CLI and radar Web UI; consumes OS-cached observations without claiming confirmed interception
 wifi_radar	adapter	Termux API OS-cached WiFi scan observations reached through radar wifi command and typed RF results
-cell_radar	adapter	Termux API OS-cached cellular observations reached through radar cells command and typed RF results
 wigle	adapter	WiGLE network-search leg reached through network_cli from network, scan -k network and /api/lookup
+wikidata	adapter	Wikidata entity source client reached through wikidata_cli from the wikidata command and folded into a people scan as a candidate lead
+wikidata_cli	adapter	wikidata query front-end reached from the wikidata command
+wikipedia	adapter	public Wikipedia user-contributions source client reached through username_cli from the username command and scan
+workbook	leaf	Office Open XML workbook reader (a publisher's .xlsx as rows, through zip_read), reached from the sanctions DFAT list
 x509	leaf	dependency-free X.509 DER reader and PEM writer behind certspotter
 xlsx	exporter	dependency-free Excel workbook writer behind scan_export's xlsx exports
 xposedornot	adapter	XposedOrNot breach-name leg reached through indicator_legs from email, scan and /api/lookup
 yaml_lite	leaf	dependency-free YAML subset reader for Spiderfoot correlation rules
-submd	adapter	sub.md passive subdomain leg reached through indicator_legs from domain, scan and /api/lookup
-opencellid	adapter	OpenCelliD cell position leg reached through indicator_legs from network cell:MCC:MNC:AREA:CELL, and its cells-in-area search from network LAT,LON, scan and /api/lookup when its key is set
-exif	adapter	image EXIF metadata and GPS source reached from the exif command
-docmeta	adapter	document XMP packet and PDF /Info metadata and embedded GPS source reached from the docmeta command
-embedded_metadata	runtime	one reading of a file's embedded metadata (exif + docmeta and the identifiers they find) shared by the web inspect view, investigate --file and reverse-image
-metadata_identifiers	runtime	the one place a metadata value becomes an entity, called by the exif and docmeta readers: identifiers in the fields people write, names in the fields that name someone, links and addresses only from fields a program writes, bounded per file
-docx	exporter	dependency-free Word document writer on xlsx's stored ZIP behind blueprint --docx and GET /api/blueprint?format=docx
-exa	adapter	Exa explicit query --exa source: fixed HTTPS origin, privately keyed, five lead-only web results
-federated_osint	adapter	indexed X recent-search clients reached through osint x and osint x-api; the bearer token is operator-owned and origin-bound
-osint_matrix	runtime	canonical compiled source-file ownership matrix reached through osint matrix CLI and protected GET /api/osint/matrix; read-only and not evidence of live provider availability
-osint_casework	leaf	source-linked casework model reached through osint case; receipts, chronology and conflicts without identity attribution
-osint_area_risk	leaf	bounded public-event pressure estimator reached through osint area-risk and area-compare; never a safety guarantee
-osint_blueprint	exporter	OSINT app blueprint registry reached through the blueprint command, GET /api/blueprint and the About view's .docx download
-public_osint	adapter	independent GDELT news, FBI notices and multi-engine public dossier front-end reached through public-osint and GET /api/lookup kinds news, notices, web and dossier
-privacy_audit	leaf	Bounded offline public-evidence privacy classifier reached through the privacy-audit CLI; no network activity, keys, or account ownership inference
+zip_read	leaf	ZIP end record, central directory and stored or deflated members read in place, reached from apk_intel and workbook
