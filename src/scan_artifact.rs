@@ -434,14 +434,14 @@ mod tests {
             )
             .with_attr("ip", "192.0.2.5"),
         );
-        let mut seen = Entity::new(EntityKind::IpAddress, "192.0.2.5", 0.9, "scan-valid");
-        seen.add_evidence(Evidence::new(
+        let mut observed = Entity::new(EntityKind::IpAddress, "192.0.2.5", 0.9, "scan-valid");
+        observed.add_evidence(Evidence::new(
             EvidenceProvenance::for_scan("rdap", "scan-valid"),
             "independently seen address",
         ));
         write(
             &dir.join("valid.json"),
-            &ScanArtifact::new("scan-valid", vec![actual, seen], Vec::new()),
+            &ScanArtifact::new("scan-valid", vec![actual, observed], Vec::new()),
         )
         .unwrap();
         let history = ArtifactHistory::open(&dir).unwrap();
@@ -478,7 +478,7 @@ mod tests {
             "address observation",
         ));
         let original = ScanArtifact::new("mixed", vec![anchor, forged, ip], Vec::new());
-        let dir = history_dir("offline-mixed-uid-synergy", &[original.clone()]);
+        let dir = history_dir("offline-mixed-uid-synergy", std::slice::from_ref(&original));
         let history = ArtifactHistory::open(&dir).unwrap();
         let view = crate::runtime::analyze_offline_with_history(
             &["example.org".to_owned()],
@@ -525,7 +525,7 @@ mod tests {
             vec![valid, candidate, valid_ip, invalid_ip],
             Vec::new(),
         );
-        let dir = history_dir("candidate-synergy", &[artifact.clone()]);
+        let dir = history_dir("candidate-synergy", std::slice::from_ref(&artifact));
         let raw = fs::read(dir.join("0.json")).unwrap();
         let history = ArtifactHistory::open(&dir).unwrap();
         let result = crate::runtime::analyze_offline_with_history(
@@ -918,7 +918,7 @@ mod tests {
         assert_eq!(all, ["scan-candidate", "scan-current", "scan-weak"]);
         assert_eq!(
             history.entities_for_scan_ref("scan-candidate"),
-            &[candidate]
+            std::slice::from_ref(&candidate)
         );
         assert_eq!(history.entities_for_scan_ref("scan-weak"), &[weak]);
         assert_eq!(
@@ -988,7 +988,7 @@ mod tests {
         );
         assert_eq!(
             history.entities_for_scan_ref("scan-copy"),
-            &[copied.clone()]
+            std::slice::from_ref(&copied)
         );
         assert_eq!(
             history.scan_ids_for_entity(&copied.uid).unwrap(),

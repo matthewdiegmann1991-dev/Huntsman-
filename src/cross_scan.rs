@@ -672,7 +672,7 @@ mod tests {
             category_from_entities(
                 &store,
                 "scan-copied",
-                &[copied.clone()],
+                std::slice::from_ref(&copied),
                 CrossScanOptions::default(),
             )
             .unwrap(),

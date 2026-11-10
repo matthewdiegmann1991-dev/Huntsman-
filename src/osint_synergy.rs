@@ -168,30 +168,8 @@ pub fn discover(entities: &[Entity]) -> SynergyReport {
                         if target.uid == entity.uid {
                             continue;
                         }
-                        let independent = target_observation(target, &family);
                         let key = (entity.uid.clone(), target.uid.clone(), relation);
-                        let new_link = SynergyLink {
-                            from_uid: entity.uid.clone(),
-                            to_uid: target.uid.clone(),
-                            from_kind: entity.kind.as_str(),
-                            from_value: entity.value.clone(),
-                            to_kind: target.kind.as_str(),
-                            to_value: target.value.clone(),
-                            relation,
-                            attribute,
-                            source: evidence.provenance.source.clone(),
-                            target_source: independent.map(|item| item.provenance.source.clone()),
-                            source_scan_id: evidence.provenance.scan_id.clone(),
-                            target_scan_id: independent
-                                .and_then(|item| item.provenance.scan_id.clone()),
-                            status: if independent.is_some() {
-                                JoinStatus::SeparatelyObservedTarget
-                            } else {
-                                JoinStatus::SourceClaimOnly
-                            },
-                            independence_status: "not_proven",
-                            interpretation: "separate source observation only; independence and relationship not proven",
-                        };
+                        let new_link = link(entity, target, evidence, &family, relation, attribute);
                         if !links.contains_key(&key) && links.len() >= MAX_LINKS {
                             truncated = true;
                             break 'entities;
@@ -218,6 +196,41 @@ pub fn discover(entities: &[Entity]) -> SynergyReport {
         examined_entities: inspected.len(),
         truncated,
         evidence_policy: "derived leads only; no change to entity confidence, evidence or verification",
+    }
+}
+
+/// The lead from `entity`'s `evidence` (its `attribute` naming `target`) to `target`, under
+/// `relation`: separately observed when `target` carries an observation outside the evidence's
+/// corroboration `family`, else the source's claim alone. **Pure.**
+fn link(
+    entity: &Entity,
+    target: &Entity,
+    evidence: &Evidence,
+    family: &str,
+    relation: &'static str,
+    attribute: &'static str,
+) -> SynergyLink {
+    let independent = target_observation(target, family);
+    SynergyLink {
+        from_uid: entity.uid.clone(),
+        to_uid: target.uid.clone(),
+        from_kind: entity.kind.as_str(),
+        from_value: entity.value.clone(),
+        to_kind: target.kind.as_str(),
+        to_value: target.value.clone(),
+        relation,
+        attribute,
+        source: evidence.provenance.source.clone(),
+        target_source: independent.map(|item| item.provenance.source.clone()),
+        source_scan_id: evidence.provenance.scan_id.clone(),
+        target_scan_id: independent.and_then(|item| item.provenance.scan_id.clone()),
+        status: if independent.is_some() {
+            JoinStatus::SeparatelyObservedTarget
+        } else {
+            JoinStatus::SourceClaimOnly
+        },
+        independence_status: "not_proven",
+        interpretation: "separate source observation only; independence and relationship not proven",
     }
 }
 

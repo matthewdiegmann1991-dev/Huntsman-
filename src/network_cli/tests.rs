@@ -170,7 +170,11 @@ fn exact_ssid_reaches_the_wigle_request_and_seed_unchanged() {
         .iter()
         .find(|entity| entity.kind == EntityKind::Ssid)
         .expect("seed survives an empty WiGLE response");
-    assert_eq!(seed.value, " Cafe Guest ");
+    // The bytes the lookup was asked for are the seed's raw value, kept as written; its value
+    // is the entity's one spelling (the entity model's rule for an SSID), which the request
+    // above never used.
+    assert_eq!(seed.raw_value, " Cafe Guest ");
+    assert_eq!(seed.value, "cafe guest");
 }
 
 #[test]
