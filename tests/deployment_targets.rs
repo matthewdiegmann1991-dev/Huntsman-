@@ -288,6 +288,8 @@ fn railway_profile_deploys_the_neutral_image_through_config_as_code() {
         "mounted at `/data`",
         "scripts/container-live-acceptance.sh",
         "Railway remains optional",
+        "railway.internal",
+        "[::]:$PORT",
     ] {
         assert!(
             guide.contains(required),
