@@ -214,14 +214,23 @@ pub(super) fn saved_scans() -> Result<ScanApi, LookupError> {
 /// when it refused; a refusal naming the narrower views when the answer is over
 /// [`MAX_SCAN_VIEW_BYTES`], which no model reads whole.
 fn read_view(api: &ScanApi, path: &str, query: &str) -> Result<serde_json::Value, LookupError> {
-    let response = api.handle("GET", path, query);
-    if response.status < 400 && response.body.len() > MAX_SCAN_VIEW_BYTES {
+    answer(&api.handle("GET", path, query), Some(MAX_SCAN_VIEW_BYTES))
+}
+
+/// A saved-scan API answer as JSON, within `bound` bytes where one applies: the route's own
+/// error, in its words, when it refused.
+fn answer(
+    response: &huntsman_recon::scan_api::ApiResponse,
+    bound: Option<usize>,
+) -> Result<serde_json::Value, LookupError> {
+    if response.status < 400 && bound.is_some_and(|bound| response.body.len() > bound) {
         return Err(LookupError {
             status: 413,
             message: format!(
-                "the answer is {} bytes, over the {MAX_SCAN_VIEW_BYTES} this tool returns: read \
+                "the answer is {} bytes, over the {bound} this tool returns: read \
                  the summary, the elements of one type, or the correlations instead",
-                response.body.len()
+                response.body.len(),
+                bound = bound.unwrap_or_default(),
             ),
         });
     }
@@ -242,9 +251,11 @@ fn read_view(api: &ScanApi, path: &str, query: &str) -> Result<serde_json::Value
     Ok(value)
 }
 
-/// The MCP `scans_list` tool: `GET /api/scans` over the saved scans on this machine.
+/// The MCP `scans_list` tool: `GET /api/scans` over the saved scans on this machine, read
+/// whole; the protocol layer answers the newest [`huntsman_recon::mcp::MAX_LISTED_SCANS`] and
+/// counts the rest, so a phone with years of scans is listed rather than refused.
 pub(super) fn web_scans_list(api: &ScanApi) -> Result<serde_json::Value, LookupError> {
-    read_view(api, "/api/scans", "")
+    answer(&api.handle("GET", "/api/scans", ""), None)
 }
 
 /// The MCP `scan_read` tool: one view of one saved scan, over the same route `serve` serves
@@ -833,6 +844,56 @@ mod tests {
             assert_eq!(row["options"]["depth"], 1, "{row}");
             assert_eq!(row["options"]["usecase"], "passive", "{row}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A store with more saved scans than fit a view is listed whole by `scans_list` (the
+    /// protocol layer cuts and counts it), where a view of the same length is refused: before,
+    /// the list went through the view bound and such a machine could not be listed at all.
+    #[test]
+    fn a_long_scan_list_is_read_whole_where_a_view_would_be_refused() {
+        let dir = std::env::temp_dir().join(format!("hse-mcp-long-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = ScanStore::open(&dir).expect("store opens");
+        let api = super::open_api(&dir, None).expect("api opens");
+        let mut rows: u64 = 0;
+        // Rows in batches, the list measured between them, until it is longer than a view.
+        while api.handle("GET", "/api/scans", "").body.len() <= MAX_SCAN_VIEW_BYTES {
+            assert!(rows < 20_000, "the list never grew past the bound");
+            for _ in 0..250 {
+                store
+                    .create(&ScanRecord {
+                        format_version: FORMAT_VERSION,
+                        id: new_id("example.com", 1919, rows),
+                        name: "long list fixture".into(),
+                        target: "example.com".into(),
+                        target_type: "INTERNET_NAME".into(),
+                        kind: "domain".into(),
+                        options: ScanOptions::default(),
+                        status: ScanStatus::Finished,
+                        created: 1919 + rows,
+                        started: Some(1920),
+                        ended: Some(1921),
+                        elements: 0,
+                        unique: 0,
+                        correlations: RiskCounts::default(),
+                        errors: 0,
+                        modules_run: Vec::new(),
+                        owner: None,
+                        owner_started: None,
+                    })
+                    .expect("row saved");
+                rows += 1;
+            }
+        }
+        let refused = read_view(&api, "/api/scans", "").expect_err("a view this long is refused");
+        assert_eq!(refused.status, 413);
+        let listed = super::web_scans_list(&api).expect("the list is read whole");
+        assert_eq!(
+            listed.as_array().map(Vec::len),
+            usize::try_from(rows).ok(),
+            "{rows}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
