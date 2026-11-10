@@ -350,13 +350,24 @@ fn lookup_tool() -> Value {
     json!({
         "name": "lookup",
         "title": "OSINT lookup",
-        "description": "Run one live OSINT lookup through every source for its kind and \
-    return the entities found with each source's typed outcome. Kinds: auto (infer from the \
-    selector), people (full name: registers, sanctions, offshore leaks), email, exposure (breach \
-    evidence for an email or handle), username, phone, domain (certificate transparency, DNS, \
-    threat feeds), ip, netblock (CIDR), asn, network (BSSID, ssid:NAME or LAT,LON), crypto \
-    (bitcoin, eth:0x…, base:0x…, sol:…), geocode (place or LAT,LON), and the public news, \
-    notices, web and dossier searches. Keyed sources run only when their key is configured.",
+        "description": format!(
+            "Run one live OSINT lookup through every source for its kind and return the \
+    entities found with each source's typed outcome. Kinds: auto (infer from the selector), \
+    people (full name: registers, sanctions, offshore leaks), email, exposure (breach evidence \
+    for an email or handle), username, phone, domain (certificate transparency, DNS, threat \
+    feeds), ip, netblock (CIDR), asn, network (BSSID, ssid:NAME or LAT,LON), crypto (bitcoin, \
+    eth:0x…, base:0x…, sol:…), geocode (place or LAT,LON), and the public news, notices, web \
+    and dossier searches. Keyed sources run only when their key is configured. Each entity \
+    carries a confidence from 0 to 1 and tags: {floor} and above is a link a recursive scan \
+    follows; a value tagged {incidental} (a page that loaded a resource from the subject, a site \
+    that redirected into it) or {shared} (one of more than {cap} names on one address) merely \
+    co-occurred with the subject, sits below that floor, and is not a link to it however many \
+    sources name it.",
+            floor = crate::gap::EXPAND_FLOOR,
+            incidental = crate::tags::INCIDENTAL,
+            shared = crate::tags::SHARED_HOSTING,
+            cap = crate::ip_cli::MAX_COHOSTS,
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -917,6 +928,28 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn the_lookup_tool_tells_a_model_what_confidence_and_the_tags_mean() {
+        let tools = Recorder::default();
+        let reply = answer(&tools, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
+        let lookup = reply["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "lookup")
+            .unwrap();
+        let text = lookup["description"].as_str().unwrap();
+        for needle in [
+            format!("{} and above is a link", crate::gap::EXPAND_FLOOR),
+            format!("tagged {}", crate::tags::INCIDENTAL),
+            crate::tags::SHARED_HOSTING.to_owned(),
+            format!("more than {} names", crate::ip_cli::MAX_COHOSTS),
+            "not a link to it".to_owned(),
+        ] {
+            assert!(text.contains(&needle), "{needle}: {text}");
+        }
     }
 
     #[test]
