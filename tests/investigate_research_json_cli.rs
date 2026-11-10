@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use huntsman_recon::exit::EX_USAGE;
+use huntsman_recon::exit::{EX_UNAVAILABLE, EX_USAGE};
 use serde_json::{Value, json};
 
 fn bin() -> Command {
@@ -220,5 +220,67 @@ fn research_json_plans_offline_as_an_object_and_documents_itself() {
         let text = String::from_utf8(help.stdout).unwrap();
         assert!(text.contains("--json"), "{command}: {text}");
         assert!(text.contains("/api/"), "{command}: {text}");
+    }
+}
+
+/// `query --json`, wherever the flag is typed, is checked with the engine options before any
+/// request: refused alone, twice, or beside a misplaced option, with a usage that names the
+/// flag, so it is never searched for as a word of the query. Its help names what it prints.
+#[test]
+fn query_json_flag_is_checked_before_any_request() {
+    for args in [
+        &["query", "--json"][..],
+        &["query", "--json", "--all"][..],
+        &["query", "topic", "--json", "--json"][..],
+        &["query", "--exa", "--json"][..],
+        &["query", "--json", "--adaptive", "--fast", "topic"][..],
+    ] {
+        let out = bin().args(args).output().unwrap();
+        assert_eq!(out.status.code(), Some(i32::from(EX_USAGE)), "{args:?}");
+        assert_eq!(out.stdout, Vec::<u8>::new(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("usage: huntsman-recon query") && stderr.contains("[--json]"),
+            "{args:?}: {stderr}"
+        );
+    }
+    // Taken from wherever it was typed: with the flag, `--exa` reaches its leg, which, without a
+    // key, makes no request and reports that; read as a word, it would have been refused as one.
+    for args in [
+        &["query", "--exa", "topic", "--json"][..],
+        &["query", "--json", "--exa", "topic"][..],
+    ] {
+        let out = bin()
+            .env_remove("HUNTSMAN_EXA_KEY")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(EX_UNAVAILABLE)),
+            "{args:?}"
+        );
+        assert_eq!(out.stdout, Vec::<u8>::new(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("engine=exa\toutcome=not_configured\tfound=none"),
+            "{args:?}: {stderr}"
+        );
+    }
+    let help = bin().args(["query", "--help"]).output().unwrap();
+    assert!(help.status.success());
+    let text = String::from_utf8(help.stdout).unwrap();
+    assert!(
+        text.contains(
+            "query [--adaptive] [--all] QUERY... [--json] | query --exa QUERY... [--json]"
+        ),
+        "{text}"
+    );
+    for route in [
+        "route web_search",
+        "route adaptive_web_search",
+        "route exa_web_search",
+    ] {
+        assert!(text.contains(route), "{route}: {text}");
     }
 }

@@ -106,8 +106,10 @@ pub(super) fn lookup_value(report: &LookupReport) -> Result<serde_json::Value, s
 /// `GET /api/lookup`: one lookup, answered with its report. With saved scans on, the lookup runs
 /// as a saved scan, so it is kept, listed under Scans, can be stopped there, and reads `ABORTED`
 /// after a server that stopped mid-lookup starts again; the answer names it. Without them the
-/// installed handler runs it and nothing is kept, as there is nowhere to keep it. Either way the
-/// request waits at most [`Lookups::wait`] and then answers `504`.
+/// installed handler runs it and nothing is kept, as there is nowhere to keep it. A public search
+/// (`news`, `notices`, `web`, `dossier`) is the handler's own route, which the scan planner has no
+/// kind for: it runs live and is not kept, saved scans or not. Either way the request waits at
+/// most [`Lookups::wait`] and then answers `504`.
 pub(super) fn lookup_response(
     parsed: &ParsedRequest<'_>,
     lookups: Option<&Lookups>,
@@ -129,7 +131,10 @@ pub(super) fn lookup_response(
         Err(message) => return json_error(400, message),
     };
     let until = Instant::now() + lookups.wait;
-    if let Some(scans) = scans {
+    // The scan planner has no kind for a public search, so routing one through it refused the
+    // search as an unknown scan kind whenever a scan directory existed.
+    let public_search = crate::public_osint::Source::parse(&query.kind).is_some();
+    if let Some(scans) = scans.filter(|_| !public_search) {
         let service = Arc::clone(scans.service());
         // Reading and encoding the saved report needs more stack than a connection has.
         let worker = thread::Builder::new()
@@ -177,46 +182,67 @@ pub(super) fn lookup_response(
     }
 }
 
-/// One `/api/lookup` as a saved scan of the target: started, or joined when the same lookup is
-/// already under way, then waited on until `until`. A scan that has not ended by then is answered
-/// `504` and runs on; one that ended with nothing saved is answered `502` with the reason its log
-/// gives. Each answer names the scan.
-fn saved_lookup(service: &Arc<ScanService>, query: &LookupQuery, until: Instant) -> String {
+/// Why a lookup run as a saved scan did not answer with a report: the status `/api/lookup`
+/// answers, the reason in words, and the scan it ran as once one was started (a `504` names a
+/// scan that runs on; a `502` one that ended with nothing saved).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedLookupFailure {
+    pub status: u16,
+    pub message: String,
+    pub scan: Option<String>,
+}
+
+/// One lookup as a saved scan of the target, as `/api/lookup` runs it with saved scans on and
+/// the MCP `lookup` tool runs it on a machine that keeps them: started, or joined when the same
+/// lookup is already under way, then waited on until `until`. The report names the scan in
+/// `scan` and its `status`.
+///
+/// # Errors
+/// The planner's refusal of the target (400, before any scan is kept); a scan that has not
+/// ended by `until`, answered 504 and running on; or one that ended with nothing saved (502,
+/// with the reason its log gives), each naming the scan once one was started.
+pub fn saved_lookup_report(
+    service: &Arc<ScanService>,
+    query: &LookupQuery,
+    until: Instant,
+) -> Result<LookupReport, SavedLookupFailure> {
     let request = ScanRequest {
         target: query.selector.clone(),
         kind: Some(query.kind.clone()),
         ..ScanRequest::default()
     };
-    let record = match service
+    let record = service
         .start_or_join(&request)
         .and_then(|record| service.wait(&record.id, until))
-    {
-        Ok(record) => record,
-        Err(failure) => return json_error(failure.status(), &failure.to_string()),
-    };
-    let failed = |status: u16, error: String| {
-        let body = serde_json::json!({ "error": error, "scan": record.id });
-        response(
-            status,
-            "application/json; charset=utf-8",
-            &format!("{body}\n"),
-            false,
-        )
+        .map_err(|failure| SavedLookupFailure {
+            status: failure.status(),
+            message: failure.to_string(),
+            scan: None,
+        })?;
+    let failed = |status: u16, message: String| SavedLookupFailure {
+        status,
+        message,
+        scan: Some(record.id.clone()),
     };
     if record.status.is_active() {
-        return failed(
+        return Err(failed(
             504,
             format!(
                 "the lookup is still running as saved scan {}; it goes on and keeps what it finds \
                  at /api/scans/{} and under Scans",
                 record.id, record.id
             ),
-        );
+        ));
     }
-    let saved = match service.store().results(&record.id) {
-        Ok(saved) => saved.filter(|_| record.status != ScanStatus::ErrorFailed),
-        Err(failure) => return json_error(500, &failure.to_string()),
-    };
+    let saved = service
+        .store()
+        .results(&record.id)
+        .map_err(|failure| SavedLookupFailure {
+            status: 500,
+            message: failure.to_string(),
+            scan: None,
+        })?
+        .filter(|_| record.status != ScanStatus::ErrorFailed);
     let Some(results) = saved else {
         let log = service.store().log(&record.id).unwrap_or_default();
         let why = log
@@ -228,19 +254,44 @@ fn saved_lookup(service: &Arc<ScanService>, query: &LookupQuery, until: Instant)
                 || "the lookup saved nothing".to_owned(),
                 |entry| entry.message.clone(),
             );
-        return failed(502, why);
+        return Err(failed(502, why));
     };
-    let report = LookupReport {
+    Ok(LookupReport {
         route: scan_route::parse_kind(&record.kind).map_or("scan", ScanKind::command),
         text: results.text,
         entities: results.entities,
         outcomes: results.outcomes,
         scan: Some(record.id.clone()),
         status: Some(record.status.as_str()),
-    };
-    match serialize_lookup(&report) {
-        Ok(body) => json_ok(&body, false),
-        Err(_) => json_error(500, "report could not be encoded"),
+    })
+}
+
+/// One `/api/lookup` as a saved scan: [`saved_lookup_report`], answered as JSON; an error body
+/// names the scan once one was started.
+fn saved_lookup(service: &Arc<ScanService>, query: &LookupQuery, until: Instant) -> String {
+    match saved_lookup_report(service, query, until) {
+        Ok(report) => match serialize_lookup(&report) {
+            Ok(body) => json_ok(&body, false),
+            Err(_) => json_error(500, "report could not be encoded"),
+        },
+        Err(SavedLookupFailure {
+            status,
+            message,
+            scan: None,
+        }) => json_error(status, &message),
+        Err(SavedLookupFailure {
+            status,
+            message,
+            scan: Some(scan),
+        }) => {
+            let body = serde_json::json!({ "error": message, "scan": scan });
+            response(
+                status,
+                "application/json; charset=utf-8",
+                &format!("{body}\n"),
+                false,
+            )
+        }
     }
 }
 
@@ -434,15 +485,44 @@ pub(super) fn research_mission_response(
         Ok(query) => query,
         Err(message) => return json_error(400, message),
     };
-    let (kind, selector) = match crate::research_route::plan(&query.selector) {
+    match start_research_mission(scans.service(), &query.selector) {
+        Ok(record) => response(
+            202,
+            "application/json; charset=utf-8",
+            &format!("{}\n", research_mission_body(&record)),
+            false,
+        ),
+        Err(refused) => json_error(refused.status, &refused.message),
+    }
+}
+
+/// A bounded, durable autonomous research mission over one exact, supported identifier, as
+/// `POST /api/research/mission` starts it and the MCP `research_mission` tool starts it: a
+/// depth-1 passive scan through the existing scan service, started or joined, kept as an
+/// ordinary saved scan, which the Scans UI, `scans` and `scan_read` own from there. The row is
+/// the scan's as started or joined; [`research_mission_body`] is the answer both give. No
+/// request is made on this thread.
+///
+/// # Errors
+/// A term the router refuses (400); a phrase, which is a discovery seed and never a scan
+/// target (422); the service's refusal to start the scan, in its words.
+pub fn start_research_mission(
+    service: &Arc<ScanService>,
+    selector: &str,
+) -> Result<crate::scan_store::ScanRecord, super::LookupError> {
+    let refused = |status: u16, message: &str| super::LookupError {
+        status,
+        message: message.to_owned(),
+    };
+    let (kind, selector) = match crate::research_route::plan(selector) {
         Ok(crate::research_route::ResearchAction::Targeted { kind, selector }) => (kind, selector),
         Ok(crate::research_route::ResearchAction::AdaptiveWeb { .. }) => {
-            return json_error(
+            return Err(refused(
                 422,
                 "an arbitrary phrase is a discovery seed, not a verified scan target; research it first and choose a supported identifier",
-            );
+            ));
         }
-        Err(message) => return json_error(400, message),
+        Err(message) => return Err(refused(400, message)),
     };
     // No new scheduler, task database or unlimited recursion. The existing worker policy caps
     // dispatch, and all intermediate evidence is checkpointed in the saved scan store.
@@ -456,11 +536,16 @@ pub(super) fn research_mission_response(
         },
         ..ScanRequest::default()
     };
-    let record = match scans.service().start_or_join(&request) {
-        Ok(record) => record,
-        Err(failure) => return json_error(failure.status(), &failure.to_string()),
-    };
-    let body = serde_json::json!({
+    service
+        .start_or_join(&request)
+        .map_err(|failure| refused(failure.status(), &failure.to_string()))
+}
+
+/// The answer to a research mission: the scan it runs as, its status now and the mission's
+/// bounds, as `POST /api/research/mission` answers it (`202`) and the MCP tool returns it.
+#[must_use]
+pub fn research_mission_body(record: &crate::scan_store::ScanRecord) -> serde_json::Value {
+    serde_json::json!({
         "mission_id": record.id,
         "scan": record.id,
         "status": record.status.as_str(),
@@ -475,13 +560,7 @@ pub(super) fn research_mission_response(
             "public_observations_are_not_independent_fact_verification",
             "follow_up_scope_is_limited_by_existing_scan_recursion_policy"
         ]
-    });
-    response(
-        202,
-        "application/json; charset=utf-8",
-        &format!("{body}\n"),
-        false,
-    )
+    })
 }
 
 /// The saved scans: Spiderfoot's scan list, scan views, exports and state changes, answered by the

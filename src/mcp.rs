@@ -40,6 +40,65 @@ pub const MAX_ANALYZE_SEEDS: usize = 16;
 /// The longest text `investigate` reads from a call: far more than a model pastes, well within
 /// the message bound, and a quarter of what the command reads from a file in Termux.
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
+/// The longest saved-scan answer `scan_read` returns (512 KiB): a whole scan's elements can run
+/// to megabytes, which no model reads; past this the tool says so and names the narrower views.
+pub const MAX_SCAN_VIEW_BYTES: usize = 512 * 1024;
+
+/// What `scan_read` reads of one saved scan: each the answer of the scan API route `serve`
+/// serves and the `scans` subcommand prints, over the same saved files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanView {
+    /// The scan's row, its sources' outcomes and its report text: `scans show`.
+    Status,
+    /// The element counts by type: `scans summary`.
+    Summary,
+    /// The elements, each a typed finding with its source and parent: `scans elements`.
+    Elements,
+    /// The correlations the rules found: `scans correlations`.
+    Correlations,
+    /// The scan's log: `scans log`.
+    Log,
+    /// The offline multi-hop analysis of the scan's entities: `scans analyze`.
+    Analyze,
+}
+
+impl ScanView {
+    /// Every view, in the order the tool's schema lists them.
+    pub const ALL: [Self; 6] = [
+        Self::Status,
+        Self::Summary,
+        Self::Elements,
+        Self::Correlations,
+        Self::Log,
+        Self::Analyze,
+    ];
+
+    /// The view's name in the tool's `view` argument.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::Summary => "summary",
+            Self::Elements => "elements",
+            Self::Correlations => "correlations",
+            Self::Log => "log",
+            Self::Analyze => "analyze",
+        }
+    }
+
+    /// The scan API path of the view for scan `id`.
+    #[must_use]
+    pub fn path(self, id: &str) -> String {
+        match self {
+            Self::Status => format!("/api/scans/{id}"),
+            other => format!("/api/scans/{id}/{}", other.name()),
+        }
+    }
+
+    fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|view| view.name() == name)
+    }
+}
 
 /// The serialized size of the entities a summary lookup shows: about twelve thousand tokens, room
 /// for a model to reason over while the full report (megabytes for a busy IP address) stays one
@@ -83,11 +142,29 @@ pub trait Tools {
     /// The search's refusal or failure, in words.
     fn research(&self, query: &str) -> Result<Value, ToolError>;
 
+    /// A bounded, durable autonomous research mission over one exact, supported identifier: the
+    /// depth-1 passive scan `POST /api/research/mission` starts, kept as a saved scan, started
+    /// or joined; the answer names the scan, which `scan_read` follows.
+    ///
+    /// # Errors
+    /// A phrase (a discovery seed, never a scan target), a term the router refuses, or a
+    /// machine that keeps no saved scans, in words.
+    fn research_mission(&self, selector: &str) -> Result<Value, ToolError>;
+
     /// The actionable entities in a text, offline: no request, no key.
     ///
     /// # Errors
     /// A text the classifier cannot read, in words.
     fn investigate(&self, text: &str) -> Result<Value, ToolError>;
+
+    /// The actionable entities in one local file, by its path on the machine the server runs
+    /// on, as `investigate --file` reads it: a text file for the selectors in it and its
+    /// embedded metadata, any other file (a photo, a PDF, a document) for its embedded metadata.
+    /// Offline: no request, no key; the file is never modified.
+    ///
+    /// # Errors
+    /// A file that cannot be read (missing, a symlink, over the bound) or decoded, in words.
+    fn investigate_file(&self, path: &str) -> Result<Value, ToolError>;
 
     /// The offline multi-hop analysis of up to [`MAX_ANALYZE_SEEDS`] seeds: the links derived
     /// between them, the next pivots, correlations, gaps and the sources the planner would ask.
@@ -95,6 +172,20 @@ pub trait Tools {
     /// # Errors
     /// Seeds the spine refuses, in words.
     fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError>;
+
+    /// The scans saved on this machine, as `scans list` and `GET /api/scans` list them: the
+    /// rows, newest first. Offline: no request, no key.
+    ///
+    /// # Errors
+    /// Why the saved scans could not be read (no scan directory, a store failure), in words.
+    fn scans_list(&self) -> Result<Value, ToolError>;
+
+    /// One saved scan's `view`, as the scan API answers it; `kind` narrows the elements view to
+    /// one Spiderfoot element type. Offline: no request, no key.
+    ///
+    /// # Errors
+    /// An unknown scan, a view too long to return, or a store failure, in words.
+    fn scan_read(&self, id: &str, view: ScanView, kind: Option<&str>) -> Result<Value, ToolError>;
 
     /// This device's OS-cached nearby Wi-Fi sightings, as `radar wifi` reads them through
     /// Termux:API; no scan is triggered and no request is made.
@@ -282,15 +373,32 @@ impl<'a, T: Tools + ?Sized> Server<'a, T> {
                 .and_then(|(name, region)| self.tools.people_discover(&name, region)),
             "research" => text_argument(arguments, "query", MAX_ARGUMENT_BYTES)
                 .and_then(|query| self.tools.research(&query)),
+            "research_mission" => refuse_unknown(arguments, &["selector"])
+                .and_then(|()| text_argument(arguments, "selector", MAX_ARGUMENT_BYTES))
+                .and_then(|selector| self.tools.research_mission(&selector)),
             "investigate" => refuse_unknown(arguments, &["text"])
                 .and_then(|()| text_argument(arguments, "text", MAX_TEXT_BYTES))
                 .and_then(|text| self.tools.investigate(&text)),
+            "investigate_file" => refuse_unknown(arguments, &["path"])
+                .and_then(|()| text_argument(arguments, "path", MAX_ARGUMENT_BYTES))
+                .and_then(|path| self.tools.investigate_file(&path)),
             "analyze" => analyze_arguments(arguments).and_then(|seeds| self.tools.analyze(&seeds)),
+            "scans_list" => refuse_unknown(arguments, &[])
+                .and_then(|()| self.tools.scans_list())
+                .map(|scans| {
+                    let count = scans.as_array().map_or(0, Vec::len);
+                    json!({ "count": count, "scans": scans })
+                }),
+            "scan_read" => scan_read_arguments(arguments).and_then(|(id, view, kind)| {
+                let report = self.tools.scan_read(&id, view, kind.as_deref())?;
+                Ok(json!({ "id": id, "view": view.name(), "report": report }))
+            }),
             "radar_wifi" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_wifi()),
             "radar_cells" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_cells()),
             "radar_track" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_track()),
-            "ble_decode" => ble_decode_arguments(arguments)
-                .and_then(|(bytes, address, raw)| ble_decode(&bytes, address.as_deref(), raw)),
+            "ble_decode" => {
+                ble_decode_arguments(arguments).and_then(|request| ble_decode(&request))
+            }
             other => return Err(format!("no tool named {other}")),
         };
         Ok(match outcome {
@@ -308,9 +416,15 @@ intelligence lookups. Every result carries its sources' typed outcomes (success,
 blocked, not_configured, upstream errors) beside the entities found. A source that did not \
 answer is not evidence of absence, and a name match, an indexed page or several engines \
 returning one URL does not prove identity. Report candidates as candidates. investigate, \
-analyze and ble_decode are offline (no request, no key): extract selectors from a text with \
-investigate, look the interesting ones up, then analyze the set for the links between them; \
-ble_decode reads the bytes of a Bluetooth LE advertisement a scanner showed. radar_wifi, \
+investigate_file, analyze and ble_decode are offline (no request, no key): extract selectors \
+from a text with investigate, or from a local file (a photo, a PDF, a document, a text; its \
+embedded metadata too) with investigate_file by its path on this machine, look the interesting \
+ones up, then analyze the set for the links between them; ble_decode reads the bytes of a \
+Bluetooth LE advertisement a scanner showed. scans_list and scan_read read, offline, the scans \
+serve and scan saved on this machine: list them, then read one's summary, elements (of one type \
+where a scan is large), correlations, log or offline analysis; research_mission starts a \
+depth-1 passive scan of one supported identifier, kept as a saved scan, which scan_read then \
+follows. radar_wifi, \
 radar_cells and radar_track read this device's own OS-cached radio sightings through Termux:API \
 when the server runs on an Android phone; elsewhere they say why they cannot.";
 
@@ -368,8 +482,12 @@ pub fn tool_definitions() -> Vec<Value> {
         lookup_tool(),
         people_discover_tool(),
         research_tool(),
+        research_mission_tool(),
         investigate_tool(),
+        investigate_file_tool(),
         analyze_tool(),
+        scans_list_tool(),
+        scan_read_tool(),
         ble_decode_tool(),
         radar_wifi_tool(),
         radar_cells_tool(),
@@ -409,7 +527,7 @@ fn ble_decode_tool() -> Value {
                     "type": "array",
                     "items": { "type": "string", "minLength": 1, "maxLength": MAX_ARGUMENT_BYTES },
                     "minItems": 1,
-                    "maxItems": MAX_BLE_TOKENS,
+                    "maxItems": crate::ble_adv::MAX_DECODE_TOKENS,
                     "description": "Hex strings in order: whole payloads (length, type, data \
     structures) or TYPE:DATA fragments as scanner apps list them, such as ff:7500... ; a \
     data-less fragment is its type alone, such as 02: .",
@@ -480,39 +598,28 @@ fn radar_track_tool() -> Value {
     })
 }
 
-/// The most hex strings one `ble_decode` call takes.
-pub const MAX_BLE_TOKENS: usize = 64;
-
-/// The `ble_decode` arguments: the hex strings, the address if given, and whether payload bytes
-/// are wanted.
+/// The `ble_decode` arguments as one request: the hex strings, the address if given, and
+/// whether payload bytes are wanted, each checked for its type here and for its bounds by the
+/// decoder.
 fn ble_decode_arguments(
     arguments: &Map<String, Value>,
-) -> Result<(Vec<String>, Option<String>, bool), ToolError> {
+) -> Result<crate::ble_adv::DecodeRequest, ToolError> {
     refuse_unknown(arguments, &["bytes", "address", "raw"])?;
     let bytes = match arguments.get("bytes") {
         Some(Value::Array(items)) => items,
         Some(_) => return Err("bytes must be an array of strings".into()),
         None => return Err("bytes is required".into()),
     };
-    if bytes.is_empty() || bytes.len() > MAX_BLE_TOKENS {
-        return Err(format!("bytes must hold 1 to {MAX_BLE_TOKENS} strings"));
-    }
-    let mut tokens = Vec::with_capacity(bytes.len());
+    let mut strings = Vec::with_capacity(bytes.len());
     for item in bytes {
         let Some(text) = item.as_str() else {
             return Err("bytes must be an array of strings".into());
         };
-        let text = text.trim();
-        if text.is_empty() || text.len() > MAX_ARGUMENT_BYTES {
-            return Err(format!(
-                "each of bytes must be 1 to {MAX_ARGUMENT_BYTES} characters"
-            ));
-        }
-        tokens.push(text.to_owned());
+        strings.push(text.to_owned());
     }
     let address = match arguments.get("address") {
         None | Some(Value::Null) => None,
-        Some(Value::String(address)) => Some(address.trim().to_owned()),
+        Some(Value::String(address)) => Some(address.clone()),
         Some(_) => return Err("address must be a string".into()),
     };
     let raw = match arguments.get("raw") {
@@ -520,17 +627,17 @@ fn ble_decode_arguments(
         Some(Value::Bool(raw)) => *raw,
         Some(_) => return Err("raw must be a boolean".into()),
     };
-    Ok((tokens, address, raw))
+    Ok(crate::ble_adv::DecodeRequest {
+        bytes: strings,
+        address,
+        raw,
+    })
 }
 
-/// The offline decode behind the `ble_decode` tool: the same decoder as `radar ble-adv`.
-fn ble_decode(tokens: &[String], address: Option<&str>, raw: bool) -> Result<Value, ToolError> {
-    let bytes = crate::ble_adv::parse_hex_tokens(tokens)?;
-    let report = crate::ble_adv::decode(&bytes, raw)?;
-    let report = match address {
-        Some(address) => crate::ble_adv::with_address(report, address)?,
-        None => report,
-    };
+/// The offline decode behind the `ble_decode` tool: the same decoder as `radar ble-adv` and
+/// `POST /api/ble/decode`.
+fn ble_decode(request: &crate::ble_adv::DecodeRequest) -> Result<Value, ToolError> {
+    let report = crate::ble_adv::decode_request(request)?;
     serde_json::to_value(report).map_err(|error| format!("report could not be encoded: {error}"))
 }
 
@@ -551,8 +658,12 @@ fn lookup_tool() -> Value {
     follows; a value tagged {incidental} (a page that loaded a resource from the subject, a site \
     that redirected into it) or {shared} (one of more than {cap} names on one address) merely \
     co-occurred with the subject, sits below that floor, and is not a link to it however many \
-    sources name it.",
+    sources name it. On a machine that keeps saved scans (any HOME), a typed lookup runs as a \
+    saved scan, as the JSON API's does: the report names it in scan and status, scans_list \
+    lists it and scan_read reads it again; one still running after {wait} seconds is refused \
+    naming its scan, which runs on. A public search runs live and is not kept.",
             floor = crate::gap::EXPAND_FLOOR,
+            wait = crate::web_server::LOOKUP_WAIT.as_secs(),
             incidental = crate::tags::INCIDENTAL,
             shared = crate::tags::SHARED_HOSTING,
             cap = crate::ip_cli::MAX_COHOSTS,
@@ -647,6 +758,48 @@ fn research_tool() -> Value {
     })
 }
 
+/// The `research_mission` tool.
+fn research_mission_tool() -> Value {
+    json!({
+        "name": "research_mission",
+        "title": "Start a research mission",
+        "description": format!(
+            "Start a bounded, durable autonomous research mission over one exact, \
+    supported identifier (an email, handle, phone, domain, IP address, address block, AS number, \
+    BSSID or LAT,LON): a depth-1 passive scan through the saved scan service, as POST \
+    /api/research/mission starts one, kept as a saved scan. The target's own lookup runs, then \
+    one lookup of each selector it found; keyed sources run where their key is configured. It \
+    waits up to {wait} seconds for the mission to end and answers with the scan's id and its \
+    status, FINISHED as a rule; one still running then goes on while this session lasts, and \
+    ends ABORTED with it: read it with scan_read (status, then summary, elements and \
+    correlations). The same identifier asked again while it runs joins that mission. A phrase \
+    or a name is a discovery seed, not a scan target: research it first and choose a supported \
+    identifier. Needs a machine that keeps saved scans (any HOME).",
+            wait = crate::web_server::LOOKUP_WAIT.as_secs(),
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "The exact identifier to investigate.",
+                },
+            },
+            "required": ["selector"],
+            "additionalProperties": false,
+        },
+        "annotations": {
+            "title": "Start a research mission",
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+        },
+    })
+}
+
 /// The `investigate` tool.
 fn investigate_tool() -> Value {
     json!({
@@ -670,6 +823,36 @@ fn investigate_tool() -> Value {
             "additionalProperties": false,
         },
         "annotations": offline_hints("Extract selectors from text"),
+    })
+}
+
+/// The `investigate_file` tool.
+fn investigate_file_tool() -> Value {
+    json!({
+        "name": "investigate_file",
+        "title": "Extract selectors and metadata from a local file",
+        "description": "Offline: no request, no key. Read one local file by its path on the \
+    machine this server runs on, as investigate --file reads it: a text file (up to 1 MiB) for \
+    every selector in it as investigate finds them, and for its embedded metadata when it carries \
+    any; any other file (a photo, a PDF, an Office document; up to 64 MiB) for its embedded \
+    metadata: the EXIF and document fields, a GPS position as coordinates, every email address, \
+    link, domain, IP address or phone number written into a field people write, and every person \
+    or organisation named as its author, creator or owner, each attributed to its field. A \
+    symbolic link is refused; the file is never modified.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "The file's path on this machine, absolute by preference.",
+                },
+            },
+            "required": ["path"],
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("Extract selectors and metadata from a local file"),
     })
 }
 
@@ -699,6 +882,104 @@ fn analyze_tool() -> Value {
         },
         "annotations": offline_hints("Offline analysis of seeds"),
     })
+}
+
+/// The `scans_list` tool.
+fn scans_list_tool() -> Value {
+    json!({
+        "name": "scans_list",
+        "title": "List the scans saved on this machine",
+        "description": "Offline: no request, no key. The scans saved on this machine by serve, \
+    scan and the JSON API, as scans list and GET /api/scans list them: each its id, name, target, \
+    kind, status, times, element and correlation counts. Read one with scan_read.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("List the scans saved on this machine"),
+    })
+}
+
+/// The `scan_read` tool.
+fn scan_read_tool() -> Value {
+    let views: Vec<&str> = ScanView::ALL.iter().map(|view| view.name()).collect();
+    json!({
+        "name": "scan_read",
+        "title": "Read one saved scan",
+        "description": "Offline: no request, no key. One saved scan, by the id scans_list gave, \
+    as the scan API and the scans subcommand answer it: view summary (the default) counts its \
+    elements by type; status is its row, its sources' typed outcomes and its report text; \
+    elements lists every element (type, data, source module, parent), narrowed to one type with \
+    type, such as EMAILADDR or IP_ADDRESS, where a scan is large; correlations lists what the \
+    rules found; log its log; analyze the offline multi-hop analysis of its entities. An answer \
+    over 512 KiB is refused with the narrower views named.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "The scan id, as scans_list gives it.",
+                },
+                "view": {
+                    "type": "string",
+                    "enum": views,
+                    "default": ScanView::Summary.name(),
+                    "description": "What to read of the scan.",
+                },
+                "type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "With view elements: only the elements of this Spiderfoot \
+    type.",
+                },
+            },
+            "required": ["id"],
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("Read one saved scan"),
+    })
+}
+
+/// The arguments of `scan_read`: a scan id of the store's own form, a view (summary when
+/// unnamed) and, with the elements view only, an element type of letters, digits and
+/// underscores, so it reaches the scan API as the one query parameter it is.
+fn scan_read_arguments(
+    arguments: &Map<String, Value>,
+) -> Result<(String, ScanView, Option<String>), ToolError> {
+    refuse_unknown(arguments, &["id", "view", "type"])?;
+    let id = text_argument(arguments, "id", MAX_ARGUMENT_BYTES)?;
+    if !crate::scan_store::valid_id(&id) {
+        return Err("id is not a scan id: give one as scans_list gives them".into());
+    }
+    let view = match arguments.get("view") {
+        None | Some(Value::Null) => ScanView::Summary,
+        Some(Value::String(name)) => ScanView::parse(name.trim()).ok_or_else(|| {
+            let names: Vec<&str> = ScanView::ALL.iter().map(|view| view.name()).collect();
+            format!("view must be one of {}", names.join(", "))
+        })?,
+        Some(_) => return Err("view must be a string".into()),
+    };
+    let kind = match arguments.get("type") {
+        None | Some(Value::Null) => None,
+        Some(_) => {
+            let kind = text_argument(arguments, "type", MAX_ARGUMENT_BYTES)?;
+            if view != ScanView::Elements {
+                return Err("type narrows the elements view only".into());
+            }
+            if !kind
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            {
+                return Err("type is an element type name: letters, digits and underscores".into());
+            }
+            Some(kind)
+        }
+    };
+    Ok((id, view, kind))
 }
 
 /// A required string argument, trimmed, nonempty and within `max` bytes.
@@ -1037,8 +1318,22 @@ mod tests {
             Ok(json!({ "route": "adaptive_web_search" }))
         }
 
+        fn research_mission(&self, selector: &str) -> Result<Value, ToolError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("research_mission {selector}"));
+            Ok(json!({ "mission_id": "0123456789abcdef", "status": "RUNNING" }))
+        }
+
         fn investigate(&self, text: &str) -> Result<Value, ToolError> {
             self.calls.borrow_mut().push(format!("investigate {text}"));
+            Ok(json!({ "route": "investigate", "entities": [] }))
+        }
+
+        fn investigate_file(&self, path: &str) -> Result<Value, ToolError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("investigate_file {path}"));
             Ok(json!({ "route": "investigate", "entities": [] }))
         }
 
@@ -1047,6 +1342,25 @@ mod tests {
                 .borrow_mut()
                 .push(format!("analyze {}", seeds.join(",")));
             Ok(json!({ "accepted": seeds, "entities": [] }))
+        }
+
+        fn scans_list(&self) -> Result<Value, ToolError> {
+            self.calls.borrow_mut().push("scans_list".into());
+            Ok(json!([{ "id": "0123456789abcdef", "status": "FINISHED" }]))
+        }
+
+        fn scan_read(
+            &self,
+            id: &str,
+            view: ScanView,
+            kind: Option<&str>,
+        ) -> Result<Value, ToolError> {
+            self.calls.borrow_mut().push(format!(
+                "scan_read {id} {} {}",
+                view.name(),
+                kind.unwrap_or("-")
+            ));
+            Ok(json!({ "EMAILADDR": 2 }))
         }
 
         fn radar_wifi(&self) -> Result<Value, ToolError> {
@@ -1197,8 +1511,12 @@ mod tests {
                 "lookup",
                 "people_discover",
                 "research",
+                "research_mission",
                 "investigate",
+                "investigate_file",
                 "analyze",
+                "scans_list",
+                "scan_read",
                 "ble_decode",
                 "radar_wifi",
                 "radar_cells",
@@ -1209,24 +1527,38 @@ mod tests {
             let name = tool["name"].as_str().unwrap();
             assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
             assert_eq!(tool["inputSchema"]["additionalProperties"], false, "{tool}");
-            // Only a tracking sweep writes anything (to the device's own log).
+            // Only a tracking sweep (the device's own log) and a research mission (a saved
+            // scan) write anything.
             assert_eq!(
                 tool["annotations"]["readOnlyHint"],
-                name != "radar_track",
+                !matches!(name, "radar_track" | "research_mission"),
                 "{tool}"
             );
             assert_eq!(tool["annotations"]["destructiveHint"], false, "{tool}");
             assert!(tool["description"].as_str().unwrap().len() > 40, "{tool}");
             // The offline tools say so: a model may call them freely and expect the same answer.
             // The device tools read this phone, not the open world, and not the same twice.
-            let offline = matches!(name, "investigate" | "analyze" | "ble_decode");
+            let offline = matches!(
+                name,
+                "investigate"
+                    | "investigate_file"
+                    | "analyze"
+                    | "scans_list"
+                    | "scan_read"
+                    | "ble_decode"
+            );
             let device = name.starts_with("radar_");
             assert_eq!(
                 tool["annotations"]["openWorldHint"],
                 !(offline || device),
                 "{tool}"
             );
-            assert_eq!(tool["annotations"]["idempotentHint"], offline, "{tool}");
+            // A mission asked again while it runs joins it, so it is idempotent though live.
+            assert_eq!(
+                tool["annotations"]["idempotentHint"],
+                offline || name == "research_mission",
+                "{tool}"
+            );
             assert_eq!(
                 tool["description"]
                     .as_str()
@@ -1333,13 +1665,39 @@ mod tests {
         call(&tools, "research", &json!({"query":"rust termux"}));
         call(
             &tools,
+            "research_mission",
+            &json!({"selector":" example.com "}),
+        );
+        call(
+            &tools,
             "investigate",
             &json!({"text":"  mail a@example.com  "}),
         );
         call(
             &tools,
+            "investigate_file",
+            &json!({"path":" /sdcard/DCIM/IMG_0001.jpg "}),
+        );
+        call(
+            &tools,
             "analyze",
             &json!({"seeds":[" a@example.com ", "example.com"]}),
+        );
+        let listed = call(&tools, "scans_list", &json!({}));
+        assert_eq!(listed["result"]["structuredContent"]["count"], 1);
+        assert_eq!(
+            listed["result"]["structuredContent"]["scans"][0]["id"],
+            "0123456789abcdef"
+        );
+        let read = call(&tools, "scan_read", &json!({"id":" 0123456789abcdef "}));
+        assert_eq!(
+            read["result"]["structuredContent"],
+            json!({"id": "0123456789abcdef", "view": "summary", "report": {"EMAILADDR": 2}})
+        );
+        call(
+            &tools,
+            "scan_read",
+            &json!({"id":"0123456789abcdef","view":"elements","type":"EMAILADDR"}),
         );
         assert_eq!(
             *tools.calls.borrow(),
@@ -1349,8 +1707,13 @@ mod tests {
                 "discover Clara Ashwell Us",
                 "discover Clara Ashwell Au",
                 "research rust termux",
+                "research_mission example.com",
                 "investigate mail a@example.com",
+                "investigate_file /sdcard/DCIM/IMG_0001.jpg",
                 "analyze a@example.com,example.com",
+                "scans_list",
+                "scan_read 0123456789abcdef summary -",
+                "scan_read 0123456789abcdef elements EMAILADDR",
             ]
         );
     }
@@ -1370,12 +1733,30 @@ mod tests {
             ),
             ("people_discover", json!({"name":"A B","region":"uk"})),
             ("research", json!({"q":"x"})),
+            ("research_mission", json!({})),
+            ("research_mission", json!({"selector":"  "})),
+            (
+                "research_mission",
+                json!({"selector":"example.com","depth":2}),
+            ),
+            (
+                "research_mission",
+                json!({"selector":"x".repeat(MAX_ARGUMENT_BYTES + 1)}),
+            ),
             ("investigate", json!({})),
             ("investigate", json!({"text":"   "})),
             ("investigate", json!({"text":"x","extra":1})),
             (
                 "investigate",
                 json!({"text":"x".repeat(MAX_TEXT_BYTES + 1)}),
+            ),
+            ("investigate_file", json!({})),
+            ("investigate_file", json!({"path":"   "})),
+            ("investigate_file", json!({"path":7})),
+            ("investigate_file", json!({"path":"/tmp/a","text":"x"})),
+            (
+                "investigate_file",
+                json!({"path":"x".repeat(MAX_ARGUMENT_BYTES + 1)}),
             ),
             ("analyze", json!({})),
             ("analyze", json!({"seeds":"a@example.com"})),
@@ -1387,6 +1768,23 @@ mod tests {
                 json!({"seeds": vec!["x"; MAX_ANALYZE_SEEDS + 1]}),
             ),
             ("analyze", json!({"seeds":["x"], "depth": 2})),
+            ("scans_list", json!({"id":"0123456789abcdef"})),
+            ("scan_read", json!({})),
+            ("scan_read", json!({"id":"not-a-scan-id"})),
+            ("scan_read", json!({"id":"0123456789abcdef","view":"graph"})),
+            ("scan_read", json!({"id":"0123456789abcdef","view":7})),
+            (
+                "scan_read",
+                json!({"id":"0123456789abcdef","type":"EMAILADDR"}),
+            ),
+            (
+                "scan_read",
+                json!({"id":"0123456789abcdef","view":"elements","type":"EMAIL ADDR"}),
+            ),
+            (
+                "scan_read",
+                json!({"id":"0123456789abcdef","view":"elements","unique":true}),
+            ),
         ] {
             let reply = call(&tools, name, &arguments);
             assert_eq!(reply["result"]["isError"], true, "{arguments}");
@@ -1550,10 +1948,22 @@ mod tests {
             fn research(&self, _: &str) -> Result<Value, ToolError> {
                 unreachable!()
             }
+            fn research_mission(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
             fn investigate(&self, _: &str) -> Result<Value, ToolError> {
                 unreachable!()
             }
+            fn investigate_file(&self, _: &str) -> Result<Value, ToolError> {
+                unreachable!()
+            }
             fn analyze(&self, _: &[String]) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn scans_list(&self) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn scan_read(&self, _: &str, _: ScanView, _: Option<&str>) -> Result<Value, ToolError> {
                 unreachable!()
             }
             fn radar_wifi(&self) -> Result<Value, ToolError> {

@@ -42,7 +42,10 @@ const PAGE: &str = include_str!("../src/web_ui.html");
 /// Raised to 142 KiB for the Rhinser offline source directory in Multi-hop Analysis:
 /// 83 locally served catalogue references, on-page filtering, and explicit HTTPS link opening.
 /// Phone-browser runtime performance remains an independent acceptance gate.
-const PAGE_BUDGET: usize = 144 * 1024;
+/// Raised to 148 KiB for the Bluetooth LE advertisement decoder in Multi-hop Analysis: an offline
+/// decode through `/api/ble/decode`, listing flags, service UUIDs, manufacturer data and the
+/// address reading field by field, as `radar ble-adv` prints them.
+const PAGE_BUDGET: usize = 148 * 1024;
 /// The server fills the page's empty `huntsman-page` meta tag with a page id of this many hex
 /// digits (`src/web_server/page.rs`), so the page as served, which is what a phone downloads and
 /// the browser check weighs, is this much longer than the file.
@@ -1003,6 +1006,32 @@ fn the_analyze_tab_extracts_seeds_from_pasted_text() {
     assert!(
         !script.contains("/api/investigate?"),
         "the text must not travel in a URL"
+    );
+}
+
+/// The Analyze tab decodes a Bluetooth LE advertisement's bytes through `POST /api/ble/decode`,
+/// the `radar ble-adv` decoder's route: the hex strings and the address go in a JSON body (never
+/// a URL), payload bytes only when asked for, and what the decoder read is listed field by field.
+#[test]
+fn the_analyze_tab_decodes_an_advertisement_from_pasted_bytes() {
+    let script = inline("script");
+    assert!(PAGE.contains(r#"<form class="row" id="bledecode">"#));
+    assert!(PAGE.contains(r#"<textarea id="blebytes" rows="3" maxlength="20000""#));
+    assert!(PAGE.contains(r#"<input id="bleaddr" type="text" maxlength="64""#));
+    assert!(PAGE.contains(r#"<input type="checkbox" id="bleraw">"#));
+    assert!(PAGE.contains(
+        r#"<button class="btn" id="blerun" type="submit">Decode advertisement</button>"#
+    ));
+    assert!(PAGE.contains(r#"<tbody id="blerows"></tbody>"#));
+    assert!(script.contains(
+        "const r=await api('/api/ble/decode',{method:'POST',body:JSON.stringify(req)}),rows=[];"
+    ));
+    assert!(script.contains("const req={bytes,raw:$('bleraw').checked},addr=$('bleaddr').value.trim();if(addr)req.address=addr;"));
+    assert!(script.contains("a label the owner typed, not an identity"));
+    assert!(script.contains("unassigned identifier"));
+    assert!(
+        !script.contains("/api/ble/decode?"),
+        "the bytes must not travel in a URL"
     );
 }
 

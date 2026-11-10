@@ -58,6 +58,9 @@ pub struct BluetoothCsvRecord {
     pub channel: Option<u8>,
     pub advertised_name: Option<String>,
     pub service_uuids: Option<String>,
+    /// The SIG's names for `service_uuids` ([`crate::bt_uuid`]), in the same order and
+    /// separator, an unassigned UUID left as its value.
+    pub service_names: Option<String>,
     pub company_id: Option<String>,
     /// The company the Bluetooth SIG assigned `company_id` to ([`crate::bt_company`]): who made
     /// the advertising firmware or the app behind it, never who owns the device.
@@ -164,6 +167,7 @@ fn parse_record(row: &[String]) -> Option<BluetoothCsvRecord> {
     let location_age_ms = optional_number(&row[17], 86_400_000).ok()?;
     let device_class = hex_field(&row[19], 8).ok()?;
     let service_uuids = optional_text(&row[20], 1024).ok()?;
+    let service_names = service_uuids.as_deref().map(name_services);
     let company_id = hex_field(&row[21], 8).ok()?;
     let company = company_id
         .as_deref()
@@ -194,6 +198,7 @@ fn parse_record(row: &[String]) -> Option<BluetoothCsvRecord> {
         channel,
         advertised_name,
         service_uuids,
+        service_names,
         company_id,
         company,
         device_class,
@@ -203,6 +208,21 @@ fn parse_record(row: &[String]) -> Option<BluetoothCsvRecord> {
         reported_accuracy_m: location.2,
         location_age_ms,
     })
+}
+
+/// The SIG's name for each 16-bit UUID in a `;`-separated list, in order, keeping the value for a
+/// UUID that is not 16-bit or not assigned. **Pure.**
+fn name_services(list: &str) -> String {
+    list.split(';')
+        .map(|uuid| {
+            let value = uuid.trim();
+            u16::from_str_radix(value.trim_start_matches("0x"), 16)
+                .ok()
+                .and_then(crate::bt_uuid::name)
+                .unwrap_or(value)
+        })
+        .collect::<Vec<&str>>()
+        .join(";")
 }
 
 /// Parse exactly Network Survey Bluetooth CSV v0.3.0 with its 23-column header.
@@ -312,6 +332,11 @@ mod tests {
         assert_eq!(record.identity_stability, "randomized_or_ephemeral");
         assert_eq!(record.technology, "LE");
         assert_eq!(record.service_uuids.as_deref(), Some("180D;180F"));
+        assert_eq!(record.service_names.as_deref(), Some("Heart Rate;Battery"));
+        assert_eq!(
+            name_services("180F;FD5A;1234;zz"),
+            "Battery;Samsung Electronics Co., Ltd.;1234;zz"
+        );
         assert_eq!(record.company_id.as_deref(), Some("004C"));
         assert_eq!(record.company, Some("Apple, Inc."));
         assert_eq!(record.reported_accuracy_m, Some(22.0));

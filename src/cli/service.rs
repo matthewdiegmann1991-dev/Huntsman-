@@ -11,6 +11,7 @@ use huntsman_recon::diagnostics::TermuxState;
 use huntsman_recon::environment::SERVE_TOKEN_ENV;
 use huntsman_recon::error::Error;
 use huntsman_recon::exit::{EX_DATAERR, EX_NOINPUT, EX_UNAVAILABLE, EX_USAGE};
+use huntsman_recon::mcp::{MAX_SCAN_VIEW_BYTES, ScanView};
 use huntsman_recon::runtime::analyze_offline_with_history;
 use huntsman_recon::scan_api::ScanApi;
 use huntsman_recon::scan_artifact::{ArtifactError, ArtifactHistory};
@@ -20,10 +21,13 @@ use huntsman_recon::scan_route::{
 };
 use huntsman_recon::textnorm::one_line;
 use huntsman_recon::web_server::{
+    LOOKUP_WAIT, research_mission_body, saved_lookup_report, start_research_mission,
+};
+use huntsman_recon::web_server::{
     LookupError, LookupQuery, LookupReport, ServeConfig, Server, resolve_serve_bind,
 };
 
-use super::lookup::{Refused, collect, investigate_entities};
+use super::lookup::{Refused, collect, investigate_entities, investigate_file};
 use super::scans::{default_rules_dir, default_scan_dir, open_api};
 
 /// Printed once by `serve` under Termux. Android may stop a process that Termux started while
@@ -185,11 +189,155 @@ pub(super) fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
     investigate_report(investigate_entities(text))
 }
 
+/// The saved-scan API the MCP tools run over: the store `serve` and `scans` use, opened as
+/// they open it (recovering scans whose owning process is gone), with the operator's
+/// correlation rules beside the shipped ones. `Err` when there is no scan directory or it
+/// cannot be opened, in the words `scans` fails with.
+pub(super) fn saved_scans() -> Result<ScanApi, LookupError> {
+    let Some(dir) = default_scan_dir() else {
+        return Err(LookupError {
+            status: 404,
+            message: "no saved scans: set HOME or HUNTSMAN_HOME to an absolute path to keep them"
+                .into(),
+        });
+    };
+    open_api(&dir, default_rules_dir().as_deref()).map_err(|error| LookupError {
+        status: 500,
+        message: format!(
+            "saved scans could not be opened: {}: {error}",
+            dir.display()
+        ),
+    })
+}
+
+/// One read of the saved-scan API as the JSON it answers: the route's own error, in its words,
+/// when it refused; a refusal naming the narrower views when the answer is over
+/// [`MAX_SCAN_VIEW_BYTES`], which no model reads whole.
+fn read_view(api: &ScanApi, path: &str, query: &str) -> Result<serde_json::Value, LookupError> {
+    let response = api.handle("GET", path, query);
+    if response.status < 400 && response.body.len() > MAX_SCAN_VIEW_BYTES {
+        return Err(LookupError {
+            status: 413,
+            message: format!(
+                "the answer is {} bytes, over the {MAX_SCAN_VIEW_BYTES} this tool returns: read \
+                 the summary, the elements of one type, or the correlations instead",
+                response.body.len()
+            ),
+        });
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(&response.body).map_err(|error| LookupError {
+            status: 500,
+            message: format!("saved scan answer could not be decoded: {error}"),
+        })?;
+    if response.status >= 400 {
+        return Err(LookupError {
+            status: response.status,
+            message: value["error"]
+                .as_str()
+                .unwrap_or("the saved scan could not be read")
+                .to_owned(),
+        });
+    }
+    Ok(value)
+}
+
+/// The MCP `scans_list` tool: `GET /api/scans` over the saved scans on this machine.
+pub(super) fn web_scans_list(api: &ScanApi) -> Result<serde_json::Value, LookupError> {
+    read_view(api, "/api/scans", "")
+}
+
+/// The MCP `scan_read` tool: one view of one saved scan, over the same route `serve` serves
+/// and the `scans` subcommand prints; `kind` is the elements view's `type` filter.
+pub(super) fn web_scan_read(
+    api: &ScanApi,
+    id: &str,
+    view: ScanView,
+    kind: Option<&str>,
+) -> Result<serde_json::Value, LookupError> {
+    let query = kind.map(|kind| format!("type={kind}")).unwrap_or_default();
+    read_view(api, &view.path(id), &query)
+}
+
+/// The MCP `research_mission` tool: the bounded, durable depth-1 passive scan of one supported
+/// identifier that `POST /api/research/mission` starts, over the same saved scans. The route
+/// answers at once and the scan runs on in `serve`; this server lives only as long as its
+/// session, so the tool waits [`LOOKUP_WAIT`] for the mission to end, as a lookup waits, and
+/// answers with the status it reached: `FINISHED` as a rule, else still running while the
+/// session lasts, which `scan_read` follows.
+pub(super) fn web_research_mission(
+    api: &ScanApi,
+    selector: &str,
+) -> Result<serde_json::Value, LookupError> {
+    let started = start_research_mission(api.service(), selector)?;
+    let record = api
+        .service()
+        .wait(&started.id, std::time::Instant::now() + LOOKUP_WAIT)
+        .map_err(|failure| LookupError {
+            status: failure.status(),
+            message: failure.to_string(),
+        })?;
+    Ok(research_mission_body(&record))
+}
+
+/// The MCP `lookup` tool on a machine that keeps saved scans, as `GET /api/lookup` runs it with
+/// saved scans on: a public search (`news`, `notices`, `web`, `dossier`) runs live, since the
+/// scan planner has no kind for it; every other lookup runs as a saved scan of its selector,
+/// kept, listed and read again by `scans_list` and `scan_read`, waiting [`LOOKUP_WAIT`] and then
+/// refusing with the scan that runs on. A refusal names the scan once one was started.
+pub(super) fn web_lookup_kept(
+    api: &ScanApi,
+    query: &LookupQuery,
+) -> Result<LookupReport, LookupError> {
+    if huntsman_recon::public_osint::Source::parse(&query.kind).is_some() {
+        return web_lookup(query);
+    }
+    saved_lookup_report(
+        api.service(),
+        query,
+        std::time::Instant::now() + LOOKUP_WAIT,
+    )
+    .map_err(|failure| {
+        let message = match &failure.scan {
+            Some(scan) if !failure.message.contains(scan.as_str()) => {
+                format!("{}; saved scan {scan}", failure.message)
+            }
+            _ => failure.message,
+        };
+        LookupError {
+            status: failure.status,
+            message,
+        }
+    })
+}
+
+/// The MCP `investigate_file` tool: one local file, by its path on the machine the server runs
+/// on, read as `investigate --file` reads it, and its entities reported as `investigate` reports
+/// them. A file that cannot be read (missing, a symlink, over the bound) is the command's own
+/// refusal, with 404 where the command exits 66 (no input) and 400 otherwise.
+pub(super) fn web_investigate_file(path: &str) -> Result<LookupReport, LookupError> {
+    let entities = investigate_file(Path::new(path)).map_err(|(code, message)| LookupError {
+        status: if code == EX_NOINPUT { 404 } else { 400 },
+        message,
+    })?;
+    investigate_report(entities)
+}
+
 /// The object `GET /api/research`, the MCP `research` tool and `research --json` answer with:
 /// the route and the adaptive search report. **Pure.**
 pub(super) fn research_json<T: serde::Serialize>(report: &T) -> serde_json::Value {
     serde_json::json!({
         "route": "adaptive_web_search",
+        "report": report,
+    })
+}
+
+/// The object `query --json` prints: the route and the keyless search report (its hits, each an
+/// engine and a URL, and an outcome per engine), named as `research --json` names the adaptive
+/// route's, so an agent reads which search answered before it reads the answer. **Pure.**
+pub(super) fn query_json(report: &huntsman_recon::web_query::SearchReport) -> serde_json::Value {
+    serde_json::json!({
+        "route": "web_search",
         "report": report,
     })
 }
@@ -512,9 +660,239 @@ pub(super) fn serve_cmd(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{rule_error_line, web_inspect, web_investigate};
+    use super::{
+        query_json, read_view, research_json, rule_error_line, web_inspect, web_investigate,
+    };
+    use huntsman_recon::mcp::MAX_SCAN_VIEW_BYTES;
+    use huntsman_recon::scan_store::{
+        FORMAT_VERSION, RiskCounts, ScanOptions, ScanRecord, ScanResults, ScanStatus, ScanStore,
+        new_id,
+    };
+    use huntsman_recon::source_outcome::SourceExecutionOutcome;
+
+    /// A finished scan with `addresses` email elements, saved under `dir` through the store
+    /// itself, so no provider runs.
+    fn seeded_scan(dir: &std::path::Path, addresses: usize) -> String {
+        let store = ScanStore::open(dir).expect("store opens");
+        let id = new_id("example.com", 1919, 0);
+        let entities: Vec<Entity> = (0..addresses)
+            .map(|index| {
+                Entity::builder(
+                    EntityKind::Email,
+                    format!("person{index}@example.com"),
+                    0.9,
+                    id.as_str(),
+                )
+                .build()
+            })
+            .collect();
+        let elements = huntsman_recon::sf_elements::elements(
+            huntsman_recon::sf_elements::Target {
+                value: "example.com",
+                kind: "INTERNET_NAME",
+            },
+            &entities,
+            1919,
+        );
+        store
+            .create(&ScanRecord {
+                format_version: FORMAT_VERSION,
+                id: id.clone(),
+                name: "bound fixture".into(),
+                target: "example.com".into(),
+                target_type: "INTERNET_NAME".into(),
+                kind: "domain".into(),
+                options: ScanOptions::default(),
+                status: ScanStatus::Finished,
+                created: 1919,
+                started: Some(1920),
+                ended: Some(1921),
+                elements: elements.len(),
+                unique: elements.len(),
+                correlations: RiskCounts::default(),
+                errors: 0,
+                modules_run: vec!["dns".into()],
+                owner: None,
+                owner_started: None,
+            })
+            .expect("row saved");
+        store
+            .save_results(&ScanResults {
+                format_version: FORMAT_VERSION,
+                scan_id: id.clone(),
+                text: "fixture".into(),
+                entities,
+                outcomes: vec![SourceExecutionOutcome::success("dns", 1, 1)],
+                elements,
+                correlations: Vec::new(),
+                lineage: Vec::new(),
+                termination: None,
+            })
+            .expect("results saved");
+        id
+    }
+
+    /// On a machine that keeps saved scans, the MCP `lookup` runs as a saved scan, as
+    /// `/api/lookup` does: the report names the scan and its status, the scan is listed, and a
+    /// target the planner refuses is refused before any scan is kept, in the planner's words.
+    #[test]
+    fn a_kept_lookup_runs_as_a_saved_scan_and_a_refused_one_keeps_nothing() {
+        use huntsman_recon::scan_service::{LookupOutput, ScanLookup, ScanService};
+        let dir = std::env::temp_dir().join(format!("hse-mcp-kept-lookup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let lookup: ScanLookup = std::sync::Arc::new(|_, selector: &str, _| {
+            Ok(LookupOutput {
+                text: format!("report on {selector}"),
+                entities: vec![Entity::builder(EntityKind::Phone, selector, 0.9, "s").build()],
+                outcomes: vec![SourceExecutionOutcome::success("phone", 1, 1)],
+            })
+        });
+        let api = huntsman_recon::scan_api::ScanApi::new(
+            ScanService::new(ScanStore::open(&dir).expect("store opens"), lookup),
+            None,
+        );
+        let report = super::web_lookup_kept(
+            &api,
+            &huntsman_recon::web_server::LookupQuery {
+                kind: "phone".into(),
+                selector: "+61412345678".into(),
+            },
+        )
+        .expect("the lookup ran as a saved scan");
+        assert_eq!(report.route, "phone");
+        assert_eq!(report.status, Some("FINISHED"));
+        let id = report.scan.clone().expect("the report names its scan");
+        assert_eq!(report.text, "report on +61412345678");
+        let listed = read_view(&api, "/api/scans", "").expect("the scan is listed");
+        assert_eq!(listed[0]["id"], id, "{listed}");
+        let refused = super::web_lookup_kept(
+            &api,
+            &huntsman_recon::web_server::LookupQuery {
+                kind: "email".into(),
+                selector: "not an address".into(),
+            },
+        )
+        .expect_err("the planner refuses the target");
+        assert_eq!(refused.status, 400);
+        assert_eq!(
+            refused.message,
+            "the target is not a valid email scan target"
+        );
+        assert_eq!(
+            read_view(&api, "/api/scans", "").map(|v| v.as_array().map_or(0, Vec::len)),
+            Ok(1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A research mission over a supported identifier starts (or joins) a depth-1 passive scan
+    /// the saved scans list, answered as the route answers it; a phrase is refused as a
+    /// discovery seed, before any scan is kept.
+    #[test]
+    fn a_research_mission_is_a_kept_depth_one_scan_and_a_phrase_is_refused() {
+        use huntsman_recon::scan_service::{LookupOutput, ScanLookup, ScanService};
+        let dir = std::env::temp_dir().join(format!("hse-mcp-mission-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let lookup: ScanLookup = std::sync::Arc::new(|_, selector: &str, _| {
+            Ok(LookupOutput {
+                text: format!("report on {selector}"),
+                entities: Vec::new(),
+                outcomes: vec![SourceExecutionOutcome::success("dns", 0, 1)],
+            })
+        });
+        let api = huntsman_recon::scan_api::ScanApi::new(
+            ScanService::new(ScanStore::open(&dir).expect("store opens"), lookup),
+            None,
+        );
+        let started = super::web_research_mission(&api, "example.org").expect("mission starts");
+        let id = started["scan"]
+            .as_str()
+            .expect("the mission names its scan")
+            .to_owned();
+        assert_eq!(started["mission_id"], id);
+        assert_eq!(started["kind"], "domain");
+        assert_eq!(started["recursion_depth"], 1);
+        assert_eq!(started["usecase"], "passive");
+        // The tool waited for the mission, which the instant lookup ended.
+        assert_eq!(started["status"], "FINISHED", "{started}");
+        // Only a mission still under way is joined: an ended one is over, a new one starts.
+        let again = super::web_research_mission(&api, "example.org").expect("asked again");
+        assert_ne!(again["scan"], id, "{again}");
+        assert_eq!(again["status"], "FINISHED", "{again}");
+        let phrase = super::web_research_mission(&api, "some words about a person")
+            .expect_err("a phrase is a discovery seed");
+        assert_eq!(phrase.status, 422);
+        assert!(
+            phrase.message.contains("discovery seed"),
+            "{}",
+            phrase.message
+        );
+        let listed = read_view(&api, "/api/scans", "").expect("listed");
+        assert_eq!(listed.as_array().map(Vec::len), Some(2), "{listed}");
+        for row in listed.as_array().unwrap_or(&Vec::new()) {
+            assert_eq!(row["options"]["depth"], 1, "{row}");
+            assert_eq!(row["options"]["usecase"], "passive", "{row}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `scan_read` returns a view within [`MAX_SCAN_VIEW_BYTES`] and refuses a longer one in
+    /// words naming the narrower views, over the API's own answer; the API's refusal of an
+    /// unknown scan is the tool's, with its status and words.
+    #[test]
+    fn a_saved_scan_view_is_read_within_its_bound_and_refused_past_it() {
+        let dir = std::env::temp_dir().join(format!("hse-mcp-scan-view-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let id = seeded_scan(&dir, 4000);
+        let api = super::open_api(&dir, None).expect("api opens");
+        let summary = read_view(&api, &format!("/api/scans/{id}/summary"), "")
+            .expect("the summary is within the bound");
+        assert!(summary.is_object() || summary.is_array(), "{summary}");
+        let all = read_view(&api, &format!("/api/scans/{id}/elements"), "")
+            .expect_err("4000 elements are over the bound");
+        assert_eq!(all.status, 413);
+        assert!(
+            all.message.contains(&MAX_SCAN_VIEW_BYTES.to_string())
+                && all.message.contains("summary"),
+            "{}",
+            all.message
+        );
+        let none = read_view(
+            &api,
+            &format!("/api/scans/{id}/elements"),
+            "type=IP_ADDRESS",
+        )
+        .expect("no element of that type: a short answer");
+        assert_eq!(none, serde_json::json!([]));
+        let unknown = read_view(&api, "/api/scans/0123456789abcdef", "")
+            .expect_err("an unknown scan is refused");
+        assert_eq!(unknown.status, 404);
+        assert_eq!(unknown.message, "no scan 0123456789abcdef");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use huntsman_recon::entity::{Entity, EntityKind};
     use huntsman_recon::source_outcome::SourceOutcomeKind;
+    use huntsman_recon::web_query::{SearchHit, SearchReport};
+
+    /// `query --json` and `research --json` name their routes apart, each over its own report,
+    /// so an agent that ran either reads which search answered before it reads the answer.
+    #[test]
+    fn query_json_names_the_keyless_route_over_the_search_report() {
+        let report = SearchReport {
+            hits: vec![SearchHit {
+                engine: "mojeek".into(),
+                url: "https://example.org/q".into(),
+                text: String::new(),
+            }],
+            outcomes: Vec::new(),
+        };
+        let value = query_json(&report);
+        assert_eq!(value["route"], "web_search");
+        assert_eq!(value["report"]["hits"][0]["engine"], "mojeek");
+        assert_eq!(value["report"]["hits"][0]["url"], "https://example.org/q");
+        assert_eq!(value["report"]["outcomes"], serde_json::json!([]));
+        assert_eq!(research_json(&report)["route"], "adaptive_web_search");
+    }
 
     /// The page's text goes through the same extraction as `investigate TEXT...`: every actionable
     /// entity in it, with the classifier's signal as evidence, rendered as the command prints it;

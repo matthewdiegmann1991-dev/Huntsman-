@@ -179,7 +179,7 @@ fn help_and_version_are_available() {
         ("attack", "attack status|coverage|gaps [--json]"),
         (
             "query",
-            "query [--adaptive] [--all] QUERY... | query --exa QUERY...",
+            "query [--adaptive] [--all] QUERY... [--json] | query --exa QUERY... [--json]",
         ),
         ("research", "research [--plan] [--all] TERM..."),
         ("sf", "sf [-M|-T|-V]"),
@@ -1311,8 +1311,8 @@ fn sf_takes_sf_py_output_flags_debug_and_listen() {
 fn sf_refuses_a_target_no_lookup_can_take() {
     let home = scratch("sf-refuses");
     for (target, why) in [
-        ("192.0.2.0/24", "not valid for a netblock scan"),
-        ("192.0.2.1", "not valid for a ip scan"),
+        ("192.0.2.0/24", "not a valid netblock scan target"),
+        ("192.0.2.1", "not a valid ip scan target"),
         ("Jane 123", "two alphabetic tokens"),
     ] {
         let out = bin()

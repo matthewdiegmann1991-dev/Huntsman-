@@ -202,7 +202,10 @@ pub struct SearchHit {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// The engines' answers to one query: the hits, URL-deduplicated, and an outcome per engine.
+/// Serialised, it is the `report` of `query --json`: each hit its engine and URL, each outcome
+/// as the typed lookups report theirs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SearchReport {
     pub hits: Vec<SearchHit>,
     pub outcomes: Vec<SourceExecutionOutcome>,
@@ -1157,6 +1160,50 @@ mod tests {
 
     use crate::deadline::FakeClock;
     use crate::http::{Response, TransportFailure};
+
+    /// The report `query --json` prints: a hit is its engine and URL, its anchor text (the
+    /// engine's description of the page) left out; an outcome is the row the typed lookups
+    /// report, so an agent reads a blocked engine as such, never as a zero result.
+    #[test]
+    fn the_report_serialises_as_hits_and_outcomes_without_anchor_text() {
+        let report = SearchReport {
+            hits: vec![SearchHit {
+                engine: "brave".into(),
+                url: "https://example.org/p".into(),
+                text: "Kylie Trong & Co".into(),
+            }],
+            outcomes: vec![
+                SourceExecutionOutcome {
+                    module: "brave".into(),
+                    kind: SourceOutcomeKind::Success,
+                    observed_at_unix: 7,
+                    http_status: Some(200),
+                    found: Some(1),
+                    retry_after_secs: None,
+                    detail: None,
+                },
+                SourceExecutionOutcome {
+                    module: "bing".into(),
+                    kind: SourceOutcomeKind::BotWaf,
+                    observed_at_unix: 7,
+                    http_status: Some(403),
+                    found: None,
+                    retry_after_secs: None,
+                    detail: Some("challenge page".into()),
+                },
+            ],
+        };
+        let value = serde_json::to_value(&report).expect("the report serialises");
+        assert_eq!(
+            value["hits"],
+            serde_json::json!([{"engine": "brave", "url": "https://example.org/p"}])
+        );
+        assert_eq!(value["outcomes"].as_array().map(Vec::len), Some(2));
+        assert_eq!(value["outcomes"][0]["kind"], "success");
+        assert_eq!(value["outcomes"][1]["module"], "bing");
+        assert_eq!(value["outcomes"][1]["kind"], "bot_waf");
+        assert_eq!(value["outcomes"][1]["found"], serde_json::Value::Null);
+    }
 
     #[test]
     fn a_hit_keeps_the_visible_text_of_every_anchor_to_it() {

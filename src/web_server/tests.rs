@@ -1851,6 +1851,35 @@ fn a_lookup_with_saved_scans_is_kept_as_a_scan_and_names_it() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The public searches (`news`, `notices`, `web`, `dossier`) are the installed handler's own
+/// routes, which the scan planner has no kind for: with saved scans on they run live, as every
+/// lookup runs without saved scans, and nothing is kept. Before, a scan directory (any `HOME`)
+/// made `/api/lookup` refuse each of them as an unknown scan kind.
+#[test]
+fn a_public_search_with_saved_scans_runs_live_and_is_not_kept() {
+    let lookup: crate::scan_service::ScanLookup =
+        Arc::new(|_, _, _| Err("the scan runner must not see a public search".into()));
+    let (routes, dir) = saved_lookup_routes("public", lookup, Duration::from_secs(10));
+    for (kind, _) in crate::public_osint::Source::NAMED {
+        let got = scans_request(
+            &routes,
+            None,
+            &format!("GET /api/lookup?kind={kind}&q=example.com HTTP/1.1\r\n{HEADER}\r\n"),
+        );
+        assert!(got.starts_with("HTTP/1.1 200"), "{kind}: {got}");
+        let body: serde_json::Value =
+            serde_json::from_str(&got[got.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert_eq!(body["text"], format!("{kind}|example.com"), "{kind}: {got}");
+        assert!(body["scan"].is_null(), "{kind}: {got}");
+    }
+    // A typed lookup still runs as a saved scan, and the public searches kept nothing.
+    let typed = scans_request(&routes, None, &format!("{PHONE_LOOKUP}{HEADER}\r\n"));
+    assert!(typed.starts_with("HTTP/1.1 502"), "{typed}");
+    let api = routes.scans.as_ref().unwrap();
+    assert_eq!(api.service().store().list().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn a_lookup_past_its_wait_answers_504_and_its_scan_runs_on_and_is_joined() {
     let gate = Arc::new(Mutex::new(()));
@@ -2097,6 +2126,49 @@ fn investigations(
         investigate: Some(Arc::new(handler)),
         ..Routes::default()
     }
+}
+
+/// One `POST /api/ble/decode` with `body` as the JSON request, as the page sends it.
+fn ble_decode(method: &str, body: &str, extra: &str) -> String {
+    text(respond(
+        &format!(
+            "{method} {BLE_DECODE_PATH} HTTP/1.1\r\nHost: localhost\r\n{HEADER}{extra}Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+        &test_config(loopback_bind(), None),
+        &Routes::default(),
+    ))
+}
+
+/// `POST /api/ble/decode` decodes the request's bytes offline, with no handler to install, and
+/// answers the decoder's report; a `GET`, a query string, a body that is not a decode request
+/// and bytes the decoder refuses are refused with the reason.
+#[test]
+fn an_advertisement_is_decoded_from_the_body() {
+    let request = r#"{"bytes":["01:06","ff:750093F67DCFC4FF"],"address":"67:06:21:95:C1:7C"}"#;
+    let answer = ble_decode("POST", request, "");
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    let body: serde_json::Value =
+        serde_json::from_str(answer.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["source"], "ble-adv");
+    assert_eq!(
+        body["manufacturer"][0]["company"],
+        "Samsung Electronics Co. Ltd."
+    );
+    assert_eq!(body["manufacturer"][0]["payload_bytes"], 6);
+    assert!(body["manufacturer"][0].get("payload_hex").is_none());
+    assert_eq!(body["address"]["kind"], "resolvable_private");
+
+    let get = ble_decode("GET", "", "");
+    assert!(get.starts_with("HTTP/1.1 405"), "{get}");
+    let not_json = ble_decode("POST", "01:06", "");
+    assert!(not_json.starts_with("HTTP/1.1 400"), "{not_json}");
+    assert!(not_json.contains("not a decode request"), "{not_json}");
+    let cut = ble_decode("POST", r#"{"bytes":["0509414243"]}"#, "");
+    assert!(cut.starts_with("HTTP/1.1 400"), "{cut}");
+    assert!(cut.contains("says 5 bytes"), "{cut}");
+    let unknown = ble_decode("POST", r#"{"bytes":["020106"],"scan":true}"#, "");
+    assert!(unknown.starts_with("HTTP/1.1 400"), "{unknown}");
 }
 
 /// One `POST /api/investigate` with `body` as the text, as the page sends it.
