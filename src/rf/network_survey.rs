@@ -59,6 +59,9 @@ pub struct BluetoothCsvRecord {
     pub advertised_name: Option<String>,
     pub service_uuids: Option<String>,
     pub company_id: Option<String>,
+    /// The company the Bluetooth SIG assigned `company_id` to ([`crate::bt_company`]): who made
+    /// the advertising firmware or the app behind it, never who owns the device.
+    pub company: Option<&'static str>,
     pub device_class: Option<String>,
     pub record_number: Option<u64>,
     /// These are unverified fixes for the collecting handset, not the emitter.
@@ -162,6 +165,10 @@ fn parse_record(row: &[String]) -> Option<BluetoothCsvRecord> {
     let device_class = hex_field(&row[19], 8).ok()?;
     let service_uuids = optional_text(&row[20], 1024).ok()?;
     let company_id = hex_field(&row[21], 8).ok()?;
+    let company = company_id
+        .as_deref()
+        .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+        .and_then(crate::bt_company::company_name);
     // Validate but never emit raw manufacturer payloads: these can carry
     // rotating identifiers, telemetry or application-specific private data.
     if !valid_manufacturer_data(&row[22]) {
@@ -188,6 +195,7 @@ fn parse_record(row: &[String]) -> Option<BluetoothCsvRecord> {
         advertised_name,
         service_uuids,
         company_id,
+        company,
         device_class,
         record_number,
         reported_latitude: location.0,
@@ -245,12 +253,13 @@ pub fn render(report: &BluetoothCsvReport) -> String {
     for row in &report.observations {
         let _ = writeln!(
             out,
-            "bluetooth-historical\taddress={}\ttype={}\tstability={}\ttechnology={}\tname={}\ttime={}\trssi_dbm={}",
+            "bluetooth-historical\taddress={}\ttype={}\tstability={}\ttechnology={}\tname={}\tcompany={}\ttime={}\trssi_dbm={}",
             escape_controls(&row.address),
             row.address_type,
             row.identity_stability,
             row.technology,
             escape_controls(row.advertised_name.as_deref().unwrap_or("")),
+            row.company.unwrap_or(""),
             escape_controls(&row.observed_at),
             row.signal_dbm
         );
@@ -304,6 +313,7 @@ mod tests {
         assert_eq!(record.technology, "LE");
         assert_eq!(record.service_uuids.as_deref(), Some("180D;180F"));
         assert_eq!(record.company_id.as_deref(), Some("004C"));
+        assert_eq!(record.company, Some("Apple, Inc."));
         assert_eq!(record.reported_accuracy_m, Some(22.0));
         assert_eq!(record.location_age_ms, Some(4916));
         let json = serde_json::to_string(&report).unwrap();

@@ -36,6 +36,7 @@ security_web	leaf	bounded anonymous HTTPS header inspection and operator-authori
 solana_rpc	adapter	keyless Solana mainnet-beta account observations through crypto_cli, scan and shared Web UI lookup: genesis-gated read-only batch, bounded SPL token, mint and multisig decode, recent transactions naming the address; provenance retained without ownership attribution
 evm_rpc	leaf	the one keyless EVM JSON-RPC account-observation core (batch request, fail-closed decode, exact-wei provenance) shared by base_rpc and eth_rpc
 bluesky_user	adapter	public Bluesky profile source client
+bt_company	leaf	Bluetooth SIG company identifier data, reached from rf::network_survey
 breach_hybrid	runtime	breach command gating and exposure order consumed by the CLI
 breach_record	leaf	what a breach record exposes, credentials held back, shared by the OathNet and DeHashed legs
 canonical	runtime	canonicalization for entities and provenance

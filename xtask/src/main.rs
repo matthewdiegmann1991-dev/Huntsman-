@@ -1,6 +1,7 @@
 //! Repository automation, in Rust. Run as `cargo run --locked -p xtask -- <command>`, or
 //! `cargo gate <mode>` for the verification gate.
 
+mod btsig;
 mod changelog;
 mod completion;
 mod confusables;
@@ -28,6 +29,7 @@ commands:
   issue-fix ...           the issue-fix path guard, capture, key scan, and publish
   dual-pass ...           the dual-pass patch-path reader and change applier
   oui ...                 pack the IEEE MA-L registry into src/oui_ieee.bin, or dump a blob
+  btsig ...               pack the Bluetooth SIG company identifiers into src/bt_company.bin, or dump a blob
   confusables generate ...  write src/evidence_ancestry/lookalike.rs from Unicode's tables";
 
 fn main() -> ExitCode {
@@ -42,6 +44,7 @@ fn main() -> ExitCode {
         Some("issue-fix") => issue_fix::run(&args[1..]),
         Some("dual-pass") => dual_pass::run(&args[1..]),
         Some("oui") => oui::run(&args[1..]),
+        Some("btsig") => btsig::run(&args[1..]),
         Some("confusables") => confusables::run(&args[1..]),
         Some("-h" | "--help") => {
             println!("{USAGE}");
