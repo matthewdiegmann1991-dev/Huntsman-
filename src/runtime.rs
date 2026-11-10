@@ -194,9 +194,7 @@ pub fn investigate_offline_with_history(
                 for seen in saved {
                     // Only exclude malformed and unverified rows from derived analysis;
                     // original artifacts and the complete raw index are intact.
-                    if seen.scan_id != id
-                        || !crate::osint_synergy::admissible_entity(seen)
-                    {
+                    if seen.scan_id != id || !crate::osint_synergy::admissible_entity(seen) {
                         incomplete = true;
                         continue;
                     }

@@ -17,7 +17,9 @@ fn verify_completion_contract(workflow: &str) -> Result<(), String> {
         "if-no-files-found: error",
     ] {
         if !workflow.contains(required) {
-            return Err(format!("completion workflow missing required control: {required}"));
+            return Err(format!(
+                "completion workflow missing required control: {required}"
+            ));
         }
     }
 
@@ -43,7 +45,9 @@ fn verify_completion_contract(workflow: &str) -> Result<(), String> {
         "gh api ",
     ] {
         if workflow.contains(forbidden) {
-            return Err(format!("completion workflow contains forbidden operation: {forbidden}"));
+            return Err(format!(
+                "completion workflow contains forbidden operation: {forbidden}"
+            ));
         }
     }
 
@@ -64,7 +68,9 @@ fn verify_completion_contract(workflow: &str) -> Result<(), String> {
             .ok_or_else(|| format!("action lacks revision: {action}"))?;
         let sha = revision.split_whitespace().next().unwrap_or_default();
         if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(format!("action is not pinned by a full commit SHA: {action}"));
+            return Err(format!(
+                "action is not pinned by a full commit SHA: {action}"
+            ));
         }
     }
 
@@ -103,7 +109,10 @@ fn completion_workflow_guard_rejects_unsafe_mutations() {
     let original = fs::read_to_string(WORKFLOW).expect("completion workflow");
     verify_completion_contract(&original).expect("baseline workflow");
     for (old, new) in [
-        ("permissions:\n  contents: read", "permissions:\n  contents: write"),
+        (
+            "permissions:\n  contents: read",
+            "permissions:\n  contents: write",
+        ),
         ("persist-credentials: false", "persist-credentials: true"),
         ("cargo fmt --all -- --check", "echo formatting skipped"),
         ("cargo test --locked -p xtask", "echo tests skipped"),
@@ -119,7 +128,10 @@ fn completion_workflow_guard_rejects_unsafe_mutations() {
             "sha256sum -c HUNTSMAN_IMPLEMENTATION_MAP.sha256",
             "sha256sum HUNTSMAN_IMPLEMENTATION_MAP.sha256",
         ),
-        ("  pull_request:", "  pull_request:\n    paths:\n      - 'docs/**'"),
+        (
+            "  pull_request:",
+            "  pull_request:\n    paths:\n      - 'docs/**'",
+        ),
         (
             "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
             "actions/checkout@v7",

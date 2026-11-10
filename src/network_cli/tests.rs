@@ -119,12 +119,20 @@ fn selectors_parse_and_their_canonical_form_reads_back() {
 /// explicit, so changing those bytes would search a different network and alter the seed.
 #[test]
 fn explicitly_prefixed_ssids_preserve_significant_spaces() {
-    for name in [" Cafe Guest ", "Cafe Guest ", " Cafe Guest", "ssid: Cafe Guest "] {
+    for name in [
+        " Cafe Guest ",
+        "Cafe Guest ",
+        " Cafe Guest",
+        "ssid: Cafe Guest ",
+    ] {
         let raw = format!("ssid:{name}");
         let selector = NetworkSelector::parse(&raw).expect("valid exact SSID");
         assert_eq!(selector, NetworkSelector::Ssid(name.to_owned()));
         assert_eq!(selector.canonical(), raw);
-        assert_eq!(NetworkSelector::parse(&selector.canonical()), Some(selector));
+        assert_eq!(
+            NetworkSelector::parse(&selector.canonical()),
+            Some(selector)
+        );
     }
 
     // Bare free-text selectors retain their established whitespace trimming.
@@ -134,7 +142,10 @@ fn explicitly_prefixed_ssids_preserve_significant_spaces() {
     );
     // Exact byte limits and control rejection apply before any lookup can leave the host.
     assert_eq!(NetworkSelector::parse("ssid:Cafe Guest\n"), None);
-    assert_eq!(NetworkSelector::parse(&format!("ssid: {}", "x".repeat(32))), None);
+    assert_eq!(
+        NetworkSelector::parse(&format!("ssid: {}", "x".repeat(32))),
+        None
+    );
     assert_eq!(NetworkSelector::parse("ssid:"), None);
 }
 
@@ -145,9 +156,8 @@ fn exact_ssid_reaches_the_wigle_request_and_seed_unchanged() {
     let parsed = NetworkArgs::parse(&args).expect("valid explicit SSID");
     assert_eq!(parsed.selector, raw);
 
-    let transport = Canned::json(
-        &serde_json::json!({"success": true, "totalResults": 0, "results": []}),
-    );
+    let transport =
+        Canned::json(&serde_json::json!({"success": true, "totalResults": 0, "results": []}));
     let (_, report) = printed(run(&transport, &keys(), &parsed.selector, 7));
     let urls = transport.urls();
     assert_eq!(urls.len(), 1, "{urls:?}");

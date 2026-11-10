@@ -334,8 +334,11 @@ mod tests {
         let mut candidate = observed(EntityKind::Domain, "example.org", "dns", "scan-a");
         candidate.tag(crate::tags::CANDIDATE);
         candidate.add_evidence(
-            Evidence::new(EvidenceProvenance::for_scan("dns", "scan-a"), "unverified A")
-                .with_attr("ip", "192.0.2.40"),
+            Evidence::new(
+                EvidenceProvenance::for_scan("dns", "scan-a"),
+                "unverified A",
+            )
+            .with_attr("ip", "192.0.2.40"),
         );
         let address = observed(EntityKind::IpAddress, "192.0.2.40", "rdap", "scan-b");
         let candidate_result = discover(&[candidate, address.clone()]);
@@ -355,11 +358,18 @@ mod tests {
 
         let mut candidate_address = address.clone();
         candidate_address.tag(crate::tags::CANDIDATE);
-        assert!(discover(&[valid.clone(), candidate_address]).links.is_empty());
+        assert!(
+            discover(&[valid.clone(), candidate_address])
+                .links
+                .is_empty()
+        );
 
         let admitted = discover(&[valid, address]);
         assert_eq!(admitted.links.len(), 1);
-        assert_eq!(admitted.links[0].status, JoinStatus::SeparatelyObservedTarget);
+        assert_eq!(
+            admitted.links[0].status,
+            JoinStatus::SeparatelyObservedTarget
+        );
         assert!(!admitted.truncated);
     }
 
@@ -383,13 +393,7 @@ mod tests {
         assert!(result.truncated);
 
         let mut forged_target = address.clone();
-        forged_target.uid = Entity::new(
-            EntityKind::IpAddress,
-            "192.0.2.42",
-            0.9,
-            "scan-b",
-        )
-        .uid;
+        forged_target.uid = Entity::new(EntityKind::IpAddress, "192.0.2.42", 0.9, "scan-b").uid;
         let result = discover(&[legitimate.clone(), forged_target]);
         assert!(result.links.is_empty());
         assert!(result.truncated);

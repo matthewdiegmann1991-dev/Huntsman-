@@ -208,11 +208,14 @@ pub fn collect_direct_bridges<S: CrossScanStore>(
         if historical.is_empty() {
             continue;
         }
-        by_uid.insert(entity.uid.clone(), BridgedEntity {
-            entity: entity.clone(),
-            tier: bridge_tier(entity),
-            overlapping_scans: historical,
-        });
+        by_uid.insert(
+            entity.uid.clone(),
+            BridgedEntity {
+                entity: entity.clone(),
+                tier: bridge_tier(entity),
+                overlapping_scans: historical,
+            },
+        );
     }
     let mut matches: Vec<_> = by_uid.into_values().collect();
     matches.sort_by(|left, right| {
@@ -729,14 +732,18 @@ mod tests {
         let CrossScanCategory::Transitive { links } = category else {
             panic!("expected a genuine second hop, got {category:?}");
         };
-        assert!(links.iter().any(|link| {
-            link.target_scan_id == "scan-c" && link.depth == 2
-        }));
-        assert!(store
-            .entities_for_scan("scan-b")
-            .unwrap()
-            .iter()
-            .any(|item| item == &copied));
+        assert!(
+            links
+                .iter()
+                .any(|link| { link.target_scan_id == "scan-c" && link.depth == 2 })
+        );
+        assert!(
+            store
+                .entities_for_scan("scan-b")
+                .unwrap()
+                .iter()
+                .any(|item| item == &copied)
+        );
     }
 
     #[test]
