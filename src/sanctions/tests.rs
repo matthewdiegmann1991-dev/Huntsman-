@@ -373,7 +373,8 @@ fn a_list_builds_only_the_listings_that_may_carry_the_name_and_counts_them_all()
     assert_eq!((parsed.read, parsed.unreadable), (2, 0));
     assert_eq!(parsed.listings.len(), 1, "{parsed:?}");
     assert_eq!(parsed.listings[0].names[0], "ÉRIC BADEGE");
-    assert!(parse_un(&referenced, &badege).listings.is_empty());
+    // A match key folds the accent: the plain spelling meets the listing too.
+    assert_eq!(parse_un(&referenced, &badege).listings.len(), 1);
 }
 
 #[test]
