@@ -370,9 +370,11 @@ jobs:
           }
           JSON
           ( cd dist && sha256sum "$ASSET" > "$ASSET.sha256" && sha256sum -c "$ASSET.sha256" )
-          sed "s/@RECON_TAG@/${TAG}/g" .github/scripts/install-termux.sh > dist/install-termux.sh
+          # The published installer installs this tag from the repository that published it.
+          sed -e "s/@RECON_TAG@/${TAG}/g" -e "s#@RECON_REPO@#${GITHUB_REPOSITORY}#g" .github/scripts/install-termux.sh > dist/install-termux.sh
           chmod 0755 dist/install-termux.sh
           grep -qF "RECON_TAG_DEFAULT=\"${TAG}\"" dist/install-termux.sh
+          grep -qF "RECON_REPO_DEFAULT=\"${GITHUB_REPOSITORY}\"" dist/install-termux.sh
           cat "dist/$ASSET.provenance.json"
 
       - name: Prove the artifact is huntsman-recon, not the legacy hse
