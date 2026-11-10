@@ -196,7 +196,7 @@ pub fn plan(target: &str, kind: Option<&str>) -> Result<ScanPlan, ServiceError> 
     };
     let canonical = canonical_selector(kind, target).ok_or_else(|| {
         ServiceError::BadRequest(format!(
-            "the target is not valid for a {} scan",
+            "the target is not a valid {} scan target",
             kind.command()
         ))
     })?;

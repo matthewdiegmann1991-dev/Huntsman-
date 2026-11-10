@@ -1311,8 +1311,8 @@ fn sf_takes_sf_py_output_flags_debug_and_listen() {
 fn sf_refuses_a_target_no_lookup_can_take() {
     let home = scratch("sf-refuses");
     for (target, why) in [
-        ("192.0.2.0/24", "not valid for a netblock scan"),
-        ("192.0.2.1", "not valid for a ip scan"),
+        ("192.0.2.0/24", "not a valid netblock scan target"),
+        ("192.0.2.1", "not a valid ip scan target"),
         ("Jane 123", "two alphabetic tokens"),
     ] {
         let out = bin()

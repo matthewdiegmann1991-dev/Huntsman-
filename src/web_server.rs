@@ -91,7 +91,7 @@ const LOOKUP_STACK_BYTES: usize = crate::concurrent::JOB_STACK_BYTES;
 /// providers, and time to wait for a place behind the scans already running. A lookup still
 /// running then is answered `504` with the saved scan it runs as, which goes on and keeps what it
 /// finds; a phone that reloads mid-lookup waits on that same scan instead of starting another.
-const LOOKUP_WAIT: Duration = Duration::from_secs(150);
+pub const LOOKUP_WAIT: Duration = Duration::from_secs(150);
 /// Longest decoded `q` accepted by `/api/lookup`, and longest seed accepted by `/api/analyze`.
 const MAX_SELECTOR_BYTES: usize = 512;
 /// Seeds in one `/api/analyze` request. The spine is offline and bounded by its own limits; this
@@ -1654,6 +1654,7 @@ use analysis::{
     investigate_response, osint_offline_response, rhinser_native_response,
 };
 use guard::{authorized, host_allowed, page_refusal, takes_post};
+pub use lookup::{SavedLookupFailure, saved_lookup_report};
 use lookup::{lookup_response, scans_response, sensor_response};
 use page::{FAVICON_SVG, PAGE, PAGE_ID};
 pub(crate) use page::{hash_source, inline_block};

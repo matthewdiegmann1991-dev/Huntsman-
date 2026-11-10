@@ -16,6 +16,14 @@ fn mcp(args: &[&str]) -> Command {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mcp-cli-home"),
     );
     command.env_remove("HUNTSMAN_HOME");
+    // A network lookup of a BSSID makes no request without these: the test host's keys stay out.
+    for key in [
+        "HUNTSMAN_WIGLE_USER",
+        "HUNTSMAN_WIGLE_TOKEN",
+        "HUNTSMAN_OPENCELLID_KEY",
+    ] {
+        command.env_remove(key);
+    }
     command
 }
 
@@ -84,7 +92,8 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
             "clientInfo":{"name":"mcp_cli test","version":"1"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
-        // Refused by the lookup adapter's own selector check, before any request is made.
+        // Refused by the scan planner's own target check (the test home keeps saved scans, as
+        // any HOME does), before any request is made and before any scan is kept.
         json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
             "name":"lookup","arguments":{"kind":"email","selector":"not an address"}}}),
         json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
@@ -126,11 +135,11 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
         .collect();
     assert_eq!(tools, TOOL_NAMES);
 
-    // The adapter's refusal reaches the model as a readable tool error, not a protocol error.
+    // The planner's refusal reaches the model as a readable tool error, not a protocol error.
     assert_eq!(answers[2]["result"]["isError"], true);
     assert_eq!(
         answers[2]["result"]["content"][0]["text"],
-        "selector is not valid for this kind"
+        "the target is not a valid email scan target"
     );
     // A single-word name is refused by the discovery's own name check, before any request.
     assert_eq!(answers[3]["result"]["isError"], true);
@@ -352,6 +361,69 @@ fn saved_scan(home: &std::path::Path) -> String {
         })
         .unwrap();
     id
+}
+
+/// On a machine that keeps saved scans, a typed lookup runs as a saved scan, as `/api/lookup`
+/// runs it: the report names the scan and its status, and the same session lists and reads it
+/// back. A BSSID's network lookup makes no request without `WiGLE` or `OpenCelliD` keys, so the
+/// whole round trip is held offline.
+#[test]
+fn a_lookup_is_kept_as_a_saved_scan_the_session_reads_back() {
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mcp-kept-lookup");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let (answers, stderr, code) = session_in(
+        Some(&home),
+        &[
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocolVersion":"2025-06-18","capabilities":{},
+                "clientInfo":{"name":"mcp_cli test","version":"1"}}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                "name":"lookup","arguments":{"kind":"network","selector":"00:1A:11:22:33:44"}}}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"scans_list"}}),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let looked = &answers[1]["result"];
+    assert_eq!(looked["isError"], false, "{looked}");
+    let summary = &looked["structuredContent"];
+    assert_eq!(summary["route"], "network", "{summary}");
+    assert_eq!(summary["status"], "FINISHED", "{summary}");
+    let id = summary["scan"].as_str().unwrap().to_owned();
+    assert!(
+        id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{summary}"
+    );
+    // No key, no request: WiGLE says so in its outcome.
+    let outcomes = summary["outcomes"].as_array().unwrap();
+    assert!(
+        outcomes.iter().any(|row| row["kind"] == "not_configured"),
+        "{summary}"
+    );
+    let listed = &answers[2]["result"]["structuredContent"];
+    assert_eq!(listed["count"], 1, "{listed}");
+    assert_eq!(listed["scans"][0]["id"], id, "{listed}");
+    assert_eq!(listed["scans"][0]["kind"], "network", "{listed}");
+    // The scan is the same lookup serve would keep: readable again, with its sources.
+    let (answers, stderr, code) = session_in(
+        Some(&home),
+        &[
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocolVersion":"2025-06-18","capabilities":{},
+                "clientInfo":{"name":"mcp_cli test","version":"1"}}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                "name":"scan_read","arguments":{"id":id,"view":"status"}}}),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let status = &answers[1]["result"]["structuredContent"]["report"];
+    assert_eq!(status["status"], "FINISHED", "{status}");
+    assert_eq!(status["kind"], "network", "{status}");
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// `scans_list` and `scan_read` read the scans saved on this machine through the scan API

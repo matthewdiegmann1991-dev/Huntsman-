@@ -643,8 +643,12 @@ fn lookup_tool() -> Value {
     follows; a value tagged {incidental} (a page that loaded a resource from the subject, a site \
     that redirected into it) or {shared} (one of more than {cap} names on one address) merely \
     co-occurred with the subject, sits below that floor, and is not a link to it however many \
-    sources name it.",
+    sources name it. On a machine that keeps saved scans (any HOME), a typed lookup runs as a \
+    saved scan, as the JSON API's does: the report names it in scan and status, scans_list \
+    lists it and scan_read reads it again; one still running after {wait} seconds is refused \
+    naming its scan, which runs on. A public search runs live and is not kept.",
             floor = crate::gap::EXPAND_FLOOR,
+            wait = crate::web_server::LOOKUP_WAIT.as_secs(),
             incidental = crate::tags::INCIDENTAL,
             shared = crate::tags::SHARED_HOSTING,
             cap = crate::ip_cli::MAX_COHOSTS,

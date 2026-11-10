@@ -182,46 +182,67 @@ pub(super) fn lookup_response(
     }
 }
 
-/// One `/api/lookup` as a saved scan of the target: started, or joined when the same lookup is
-/// already under way, then waited on until `until`. A scan that has not ended by then is answered
-/// `504` and runs on; one that ended with nothing saved is answered `502` with the reason its log
-/// gives. Each answer names the scan.
-fn saved_lookup(service: &Arc<ScanService>, query: &LookupQuery, until: Instant) -> String {
+/// Why a lookup run as a saved scan did not answer with a report: the status `/api/lookup`
+/// answers, the reason in words, and the scan it ran as once one was started (a `504` names a
+/// scan that runs on; a `502` one that ended with nothing saved).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedLookupFailure {
+    pub status: u16,
+    pub message: String,
+    pub scan: Option<String>,
+}
+
+/// One lookup as a saved scan of the target, as `/api/lookup` runs it with saved scans on and
+/// the MCP `lookup` tool runs it on a machine that keeps them: started, or joined when the same
+/// lookup is already under way, then waited on until `until`. The report names the scan in
+/// `scan` and its `status`.
+///
+/// # Errors
+/// The planner's refusal of the target (400, before any scan is kept); a scan that has not
+/// ended by `until`, answered 504 and running on; or one that ended with nothing saved (502,
+/// with the reason its log gives), each naming the scan once one was started.
+pub fn saved_lookup_report(
+    service: &Arc<ScanService>,
+    query: &LookupQuery,
+    until: Instant,
+) -> Result<LookupReport, SavedLookupFailure> {
     let request = ScanRequest {
         target: query.selector.clone(),
         kind: Some(query.kind.clone()),
         ..ScanRequest::default()
     };
-    let record = match service
+    let record = service
         .start_or_join(&request)
         .and_then(|record| service.wait(&record.id, until))
-    {
-        Ok(record) => record,
-        Err(failure) => return json_error(failure.status(), &failure.to_string()),
-    };
-    let failed = |status: u16, error: String| {
-        let body = serde_json::json!({ "error": error, "scan": record.id });
-        response(
-            status,
-            "application/json; charset=utf-8",
-            &format!("{body}\n"),
-            false,
-        )
+        .map_err(|failure| SavedLookupFailure {
+            status: failure.status(),
+            message: failure.to_string(),
+            scan: None,
+        })?;
+    let failed = |status: u16, message: String| SavedLookupFailure {
+        status,
+        message,
+        scan: Some(record.id.clone()),
     };
     if record.status.is_active() {
-        return failed(
+        return Err(failed(
             504,
             format!(
                 "the lookup is still running as saved scan {}; it goes on and keeps what it finds \
                  at /api/scans/{} and under Scans",
                 record.id, record.id
             ),
-        );
+        ));
     }
-    let saved = match service.store().results(&record.id) {
-        Ok(saved) => saved.filter(|_| record.status != ScanStatus::ErrorFailed),
-        Err(failure) => return json_error(500, &failure.to_string()),
-    };
+    let saved = service
+        .store()
+        .results(&record.id)
+        .map_err(|failure| SavedLookupFailure {
+            status: 500,
+            message: failure.to_string(),
+            scan: None,
+        })?
+        .filter(|_| record.status != ScanStatus::ErrorFailed);
     let Some(results) = saved else {
         let log = service.store().log(&record.id).unwrap_or_default();
         let why = log
@@ -233,19 +254,44 @@ fn saved_lookup(service: &Arc<ScanService>, query: &LookupQuery, until: Instant)
                 || "the lookup saved nothing".to_owned(),
                 |entry| entry.message.clone(),
             );
-        return failed(502, why);
+        return Err(failed(502, why));
     };
-    let report = LookupReport {
+    Ok(LookupReport {
         route: scan_route::parse_kind(&record.kind).map_or("scan", ScanKind::command),
         text: results.text,
         entities: results.entities,
         outcomes: results.outcomes,
         scan: Some(record.id.clone()),
         status: Some(record.status.as_str()),
-    };
-    match serialize_lookup(&report) {
-        Ok(body) => json_ok(&body, false),
-        Err(_) => json_error(500, "report could not be encoded"),
+    })
+}
+
+/// One `/api/lookup` as a saved scan: [`saved_lookup_report`], answered as JSON; an error body
+/// names the scan once one was started.
+fn saved_lookup(service: &Arc<ScanService>, query: &LookupQuery, until: Instant) -> String {
+    match saved_lookup_report(service, query, until) {
+        Ok(report) => match serialize_lookup(&report) {
+            Ok(body) => json_ok(&body, false),
+            Err(_) => json_error(500, "report could not be encoded"),
+        },
+        Err(SavedLookupFailure {
+            status,
+            message,
+            scan: None,
+        }) => json_error(status, &message),
+        Err(SavedLookupFailure {
+            status,
+            message,
+            scan: Some(scan),
+        }) => {
+            let body = serde_json::json!({ "error": message, "scan": scan });
+            response(
+                status,
+                "application/json; charset=utf-8",
+                &format!("{body}\n"),
+                false,
+            )
+        }
     }
 }
 

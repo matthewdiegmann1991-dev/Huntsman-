@@ -20,6 +20,7 @@ use huntsman_recon::scan_route::{
     parse_kind,
 };
 use huntsman_recon::textnorm::one_line;
+use huntsman_recon::web_server::{LOOKUP_WAIT, saved_lookup_report};
 use huntsman_recon::web_server::{
     LookupError, LookupQuery, LookupReport, ServeConfig, Server, resolve_serve_bind,
 };
@@ -186,11 +187,11 @@ pub(super) fn web_investigate(text: &str) -> Result<LookupReport, LookupError> {
     investigate_report(investigate_entities(text))
 }
 
-/// The saved-scan API the MCP `scans_list` and `scan_read` tools read: the store `serve` and
-/// `scans` use, opened as they open it (recovering scans whose owning process is gone), with
-/// the operator's correlation rules beside the shipped ones. `Err` when there is no scan
-/// directory or it cannot be opened, in the words `scans` fails with.
-fn saved_scans() -> Result<ScanApi, LookupError> {
+/// The saved-scan API the MCP tools run over: the store `serve` and `scans` use, opened as
+/// they open it (recovering scans whose owning process is gone), with the operator's
+/// correlation rules beside the shipped ones. `Err` when there is no scan directory or it
+/// cannot be opened, in the words `scans` fails with.
+pub(super) fn saved_scans() -> Result<ScanApi, LookupError> {
     let Some(dir) = default_scan_dir() else {
         return Err(LookupError {
             status: 404,
@@ -210,11 +211,6 @@ fn saved_scans() -> Result<ScanApi, LookupError> {
 /// One read of the saved-scan API as the JSON it answers: the route's own error, in its words,
 /// when it refused; a refusal naming the narrower views when the answer is over
 /// [`MAX_SCAN_VIEW_BYTES`], which no model reads whole.
-fn saved_scans_get(path: &str, query: &str) -> Result<serde_json::Value, LookupError> {
-    read_view(&saved_scans()?, path, query)
-}
-
-/// [`saved_scans_get`] over `api`.
 fn read_view(api: &ScanApi, path: &str, query: &str) -> Result<serde_json::Value, LookupError> {
     let response = api.handle("GET", path, query);
     if response.status < 400 && response.body.len() > MAX_SCAN_VIEW_BYTES {
@@ -245,19 +241,51 @@ fn read_view(api: &ScanApi, path: &str, query: &str) -> Result<serde_json::Value
 }
 
 /// The MCP `scans_list` tool: `GET /api/scans` over the saved scans on this machine.
-pub(super) fn web_scans_list() -> Result<serde_json::Value, LookupError> {
-    saved_scans_get("/api/scans", "")
+pub(super) fn web_scans_list(api: &ScanApi) -> Result<serde_json::Value, LookupError> {
+    read_view(api, "/api/scans", "")
 }
 
 /// The MCP `scan_read` tool: one view of one saved scan, over the same route `serve` serves
 /// and the `scans` subcommand prints; `kind` is the elements view's `type` filter.
 pub(super) fn web_scan_read(
+    api: &ScanApi,
     id: &str,
     view: ScanView,
     kind: Option<&str>,
 ) -> Result<serde_json::Value, LookupError> {
     let query = kind.map(|kind| format!("type={kind}")).unwrap_or_default();
-    saved_scans_get(&view.path(id), &query)
+    read_view(api, &view.path(id), &query)
+}
+
+/// The MCP `lookup` tool on a machine that keeps saved scans, as `GET /api/lookup` runs it with
+/// saved scans on: a public search (`news`, `notices`, `web`, `dossier`) runs live, since the
+/// scan planner has no kind for it; every other lookup runs as a saved scan of its selector,
+/// kept, listed and read again by `scans_list` and `scan_read`, waiting [`LOOKUP_WAIT`] and then
+/// refusing with the scan that runs on. A refusal names the scan once one was started.
+pub(super) fn web_lookup_kept(
+    api: &ScanApi,
+    query: &LookupQuery,
+) -> Result<LookupReport, LookupError> {
+    if huntsman_recon::public_osint::Source::parse(&query.kind).is_some() {
+        return web_lookup(query);
+    }
+    saved_lookup_report(
+        api.service(),
+        query,
+        std::time::Instant::now() + LOOKUP_WAIT,
+    )
+    .map_err(|failure| {
+        let message = match &failure.scan {
+            Some(scan) if !failure.message.contains(scan.as_str()) => {
+                format!("{}; saved scan {scan}", failure.message)
+            }
+            _ => failure.message,
+        };
+        LookupError {
+            status: failure.status,
+            message,
+        }
+    })
 }
 
 /// The MCP `investigate_file` tool: one local file, by its path on the machine the server runs
@@ -679,6 +707,59 @@ mod tests {
             })
             .expect("results saved");
         id
+    }
+
+    /// On a machine that keeps saved scans, the MCP `lookup` runs as a saved scan, as
+    /// `/api/lookup` does: the report names the scan and its status, the scan is listed, and a
+    /// target the planner refuses is refused before any scan is kept, in the planner's words.
+    #[test]
+    fn a_kept_lookup_runs_as_a_saved_scan_and_a_refused_one_keeps_nothing() {
+        use huntsman_recon::scan_service::{LookupOutput, ScanLookup, ScanService};
+        let dir = std::env::temp_dir().join(format!("hse-mcp-kept-lookup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let lookup: ScanLookup = std::sync::Arc::new(|_, selector: &str, _| {
+            Ok(LookupOutput {
+                text: format!("report on {selector}"),
+                entities: vec![Entity::builder(EntityKind::Phone, selector, 0.9, "s").build()],
+                outcomes: vec![SourceExecutionOutcome::success("phone", 1, 1)],
+            })
+        });
+        let api = huntsman_recon::scan_api::ScanApi::new(
+            ScanService::new(ScanStore::open(&dir).expect("store opens"), lookup),
+            None,
+        );
+        let report = super::web_lookup_kept(
+            &api,
+            &huntsman_recon::web_server::LookupQuery {
+                kind: "phone".into(),
+                selector: "+61412345678".into(),
+            },
+        )
+        .expect("the lookup ran as a saved scan");
+        assert_eq!(report.route, "phone");
+        assert_eq!(report.status, Some("FINISHED"));
+        let id = report.scan.clone().expect("the report names its scan");
+        assert_eq!(report.text, "report on +61412345678");
+        let listed = read_view(&api, "/api/scans", "").expect("the scan is listed");
+        assert_eq!(listed[0]["id"], id, "{listed}");
+        let refused = super::web_lookup_kept(
+            &api,
+            &huntsman_recon::web_server::LookupQuery {
+                kind: "email".into(),
+                selector: "not an address".into(),
+            },
+        )
+        .expect_err("the planner refuses the target");
+        assert_eq!(refused.status, 400);
+        assert_eq!(
+            refused.message,
+            "the target is not a valid email scan target"
+        );
+        assert_eq!(
+            read_view(&api, "/api/scans", "").map(|v| v.as_array().map_or(0, Vec::len)),
+            Ok(1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `scan_read` returns a view within [`MAX_SCAN_VIEW_BYTES`] and refuses a longer one in
