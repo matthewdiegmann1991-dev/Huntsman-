@@ -4,6 +4,7 @@ account_leg	adapter	shared fetch and identity checks of the simple username legs
 acnc	adapter	ACNC charity register source client folded into a people scan as a candidate lead
 address_au	leaf	Australian address and phone normalization utility
 ae_id	leaf	UAE identifier validation (Emirates ID Luhn, UAE IBAN mod 97-10) behind the id command
+aec_returns	adapter	keyless AEC Transparency Register annual returns, kept on the device through the threat feeds' download-and-keep machinery and matched locally in a people scan (rows that carry every word of the name, as Document leads)
 analysis	runtime	shared analysis fan-out
 api_leg	runtime	shared request path, key binding and status mapping of the free-tier API legs
 apk_intel	adapter	bounded offline APK archive intelligence reached by the shipped apk CLI and the serve upload path: ZIP inventory, binary AndroidManifest.xml, v1/v2/v3 signer certificates and DEX code URLs as source-labelled evidence and pivot entities

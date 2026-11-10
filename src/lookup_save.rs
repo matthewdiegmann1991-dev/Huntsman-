@@ -118,6 +118,7 @@ fn people_outcome_provenance(label: &str) -> (&str, &'static str) {
         "fbi_wanted" => ("fbi_wanted", "src/public_osint.rs"),
         "icij_offshore" => ("icij_offshore", "src/icij_offshore.rs"),
         "sanctions" => ("sanctions", "src/sanctions.rs"),
+        "aec_transparency" => ("aec_transparency", "src/aec_returns.rs"),
         _ => (module, "src/people_cli.rs"),
     }
 }

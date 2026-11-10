@@ -136,6 +136,19 @@ impl Lists {
             dir,
         }
     }
+
+    /// The transport the lists download over, which the other registers kept beside them (the
+    /// AEC's returns) download over too; `None` consults no list.
+    #[must_use]
+    pub fn transport(&self) -> Option<&(dyn Transport + Send + Sync)> {
+        self.transport.as_deref()
+    }
+
+    /// The directory the copies are kept in, or none.
+    #[must_use]
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
 }
 
 /// One listing: its key, the names it is known by, and every field kept for the evidence.

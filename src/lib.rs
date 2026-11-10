@@ -14,6 +14,7 @@ pub mod account_leg;
 pub mod acnc;
 pub mod address_au;
 pub mod ae_id;
+pub mod aec_returns;
 pub mod analysis;
 pub mod api_leg;
 pub mod apk_intel;
