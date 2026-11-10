@@ -236,6 +236,56 @@ pub(super) fn investigate_response(
     }
 }
 
+/// `POST /api/ble/decode`: the body is the JSON of a decode request (`bytes`, `address`, `raw`);
+/// the answer is the decoder's report, as `radar ble-adv --json` prints it. Offline: no request,
+/// no key, no handler to install.
+pub(super) fn ble_decode_response(parsed: &ParsedRequest<'_>) -> String {
+    if parsed.method != Method::Post {
+        return json_error(405, "decoding needs POST with the request as the JSON body");
+    }
+    if let Some(refused) = page_refusal(parsed, "decoding", true) {
+        return refused;
+    }
+    if !parsed.query.is_empty() {
+        return json_error(
+            400,
+            "decoding takes no query string: send the request as the body",
+        );
+    }
+    let length = match parsed.content_length {
+        None | Some(0) => return json_error(400, "decoding needs the request as the JSON body"),
+        Some(length) if length > MAX_FORM_BYTES => {
+            return json_error(
+                413,
+                &format!("the request is longer than {MAX_FORM_BYTES} bytes"),
+            );
+        }
+        Some(length) => length,
+    };
+    let Some(body) = parsed.body else {
+        return json_error(400, "the request ended before its head did");
+    };
+    if body.len() < length {
+        return json_error(400, "the request ended before the length it announced");
+    }
+    let request: crate::ble_adv::DecodeRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => {
+            return json_error(
+                400,
+                &format!("the request is not a decode request: {error}"),
+            );
+        }
+    };
+    match crate::ble_adv::decode_request(&request) {
+        Ok(report) => match serde_json::to_string(&report) {
+            Ok(body) => json_ok(&body, false),
+            Err(_) => json_error(500, "the report could not be encoded"),
+        },
+        Err(message) => json_error(400, &message),
+    }
+}
+
 /// `POST /api/inspect?name=FILE`: the uploaded file's EXIF and embedded document metadata, as a
 /// report. The body is the file's raw bytes (`fetch` with a `File` as its body), read only once
 /// [`inspect_admits`] took the request; a request it did not take is answered why here.

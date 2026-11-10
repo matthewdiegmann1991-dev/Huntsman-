@@ -227,6 +227,16 @@
 <p class="note" id="txstatus" role="status"></p>
 <p class="alert" id="txerror" role="alert" hidden></p>
 <div class="table-wrap" id="txresult" hidden><table><thead><tr><th>kind</th><th>value</th><th>confidence</th><th>signal</th></tr></thead><tbody id="txentities"></tbody></table></div>
+<p class="help">Offline: decode the bytes of a Bluetooth LE advertisement a scanner app showed, as radar ble-adv does: flags, service UUIDs and manufacturer data named from the Bluetooth SIG lists, the local name (a label the owner typed, never an identity), and the address read as a Bluetooth LE address. Payloads are reported by length unless raw bytes are asked for.</p>
+<form class="row" id="bledecode">
+<textarea id="blebytes" rows="3" maxlength="20000" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Hex, a structure or a whole payload per line: 01:06, ff:7500021861b1..., 020106030f18..." aria-label="advertisement bytes in hex"></textarea>
+<input id="bleaddr" type="text" maxlength="64" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Device address (optional)" aria-label="device address">
+<label class="cb"><input type="checkbox" id="bleraw"> raw payload bytes</label>
+<button class="btn" id="blerun" type="submit">Decode advertisement</button>
+</form>
+<p class="note" id="blestatus" role="status"></p>
+<p class="alert" id="bleerror" role="alert" hidden></p>
+<div class="table-wrap" id="bleresult" hidden><table><thead><tr><th>field</th><th>value</th></tr></thead><tbody id="blerows"></tbody></table></div>
 </div></div>
 <div class="panel" id="rhinser-sources-panel">
 <div class="panel-heading">Rhinser public-source directory <span class="badge" id="rhinser-source-list-n">0</span></div>
@@ -1668,6 +1678,28 @@ $('osint-risk-form').onsubmit=ev=>{
   osintOffline('/api/osint/area-risk','osint-risk-input','osint-risk-output','osint-risk-run');
 };
 $('adownload').onclick=()=>{if(alast)save(alast,'huntsman-analysis')};
+$('bledecode').onsubmit=async ev=>{
+  ev.preventDefault();$('bleerror').hidden=true;
+  const bytes=$('blebytes').value.split(/\s+/).map(s=>s.trim()).filter(Boolean);if(!bytes.length)return;
+  const req={bytes,raw:$('bleraw').checked},addr=$('bleaddr').value.trim();if(addr)req.address=addr;
+  const b=$('blerun');b.disabled=true;$('blestatus').textContent='Decoding…';
+  try{
+    const r=await api('/api/ble/decode',{method:'POST',body:JSON.stringify(req)}),rows=[];
+    if(r.flags)rows.push(['flags','0x'+r.flags.raw.toString(16).padStart(2,'0')+' '+(r.flags.set||[]).join(', ')]);
+    if(r.local_name!=null)rows.push(['local name',r.local_name+(r.local_name_complete?'':' (shortened)')+' · a label the owner typed, not an identity']);
+    for(const u of r.service_uuids||[])rows.push(['service uuid',u.uuid+(u.service?' · '+u.service:'')+(u.complete_list?'':' (incomplete list)')]);
+    for(const m of r.manufacturer||[])rows.push(['manufacturer','0x'+m.company_id+' · '+(m.company||'unassigned identifier')+' · '+m.payload_bytes+' payload bytes'+(m.payload_hex?' · '+m.payload_hex:'')]);
+    for(const d of r.service_data||[])rows.push(['service data',d.uuid+(d.service?' · '+d.service:'')+' · '+d.data_bytes+' bytes'+(d.data_hex?' · '+d.data_hex:'')]);
+    if(r.tx_power_dbm!=null)rows.push(['tx power',r.tx_power_dbm+' dBm']);
+    if(r.appearance)rows.push(['appearance','0x'+r.appearance.raw.toString(16).padStart(4,'0')+' · '+r.appearance.category]);
+    if(r.address)rows.push(['address',r.address.address+' · '+r.address.kind.replace(/_/g,' ')+(r.address.vendor?' · '+r.address.vendor:'')+' · '+r.address.persistence]);
+    for(const n of r.notes||[])rows.push(['note',n]);
+    fill('blerows',rows,x=>x);
+    $('bleresult').hidden=false;
+    $('blestatus').textContent=(r.structures||[]).length+' structure'+((r.structures||[]).length===1?'':'s')+' in '+r.input_bytes+' bytes; nothing was sent anywhere.';
+  }catch(e){$('blestatus').textContent='Not decoded.';fail('bleerror',e.message)}
+  finally{b.disabled=false}
+};
 $('investigate').onsubmit=async ev=>{
   ev.preventDefault();$('txerror').hidden=true;
   const text=$('txtext').value;if(!text.trim())return;

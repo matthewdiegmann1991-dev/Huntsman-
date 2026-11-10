@@ -289,8 +289,9 @@ impl<'a, T: Tools + ?Sized> Server<'a, T> {
             "radar_wifi" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_wifi()),
             "radar_cells" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_cells()),
             "radar_track" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_track()),
-            "ble_decode" => ble_decode_arguments(arguments)
-                .and_then(|(bytes, address, raw)| ble_decode(&bytes, address.as_deref(), raw)),
+            "ble_decode" => {
+                ble_decode_arguments(arguments).and_then(|request| ble_decode(&request))
+            }
             other => return Err(format!("no tool named {other}")),
         };
         Ok(match outcome {
@@ -409,7 +410,7 @@ fn ble_decode_tool() -> Value {
                     "type": "array",
                     "items": { "type": "string", "minLength": 1, "maxLength": MAX_ARGUMENT_BYTES },
                     "minItems": 1,
-                    "maxItems": MAX_BLE_TOKENS,
+                    "maxItems": crate::ble_adv::MAX_DECODE_TOKENS,
                     "description": "Hex strings in order: whole payloads (length, type, data \
     structures) or TYPE:DATA fragments as scanner apps list them, such as ff:7500... ; a \
     data-less fragment is its type alone, such as 02: .",
@@ -480,39 +481,28 @@ fn radar_track_tool() -> Value {
     })
 }
 
-/// The most hex strings one `ble_decode` call takes.
-pub const MAX_BLE_TOKENS: usize = 64;
-
-/// The `ble_decode` arguments: the hex strings, the address if given, and whether payload bytes
-/// are wanted.
+/// The `ble_decode` arguments as one request: the hex strings, the address if given, and
+/// whether payload bytes are wanted, each checked for its type here and for its bounds by the
+/// decoder.
 fn ble_decode_arguments(
     arguments: &Map<String, Value>,
-) -> Result<(Vec<String>, Option<String>, bool), ToolError> {
+) -> Result<crate::ble_adv::DecodeRequest, ToolError> {
     refuse_unknown(arguments, &["bytes", "address", "raw"])?;
     let bytes = match arguments.get("bytes") {
         Some(Value::Array(items)) => items,
         Some(_) => return Err("bytes must be an array of strings".into()),
         None => return Err("bytes is required".into()),
     };
-    if bytes.is_empty() || bytes.len() > MAX_BLE_TOKENS {
-        return Err(format!("bytes must hold 1 to {MAX_BLE_TOKENS} strings"));
-    }
-    let mut tokens = Vec::with_capacity(bytes.len());
+    let mut strings = Vec::with_capacity(bytes.len());
     for item in bytes {
         let Some(text) = item.as_str() else {
             return Err("bytes must be an array of strings".into());
         };
-        let text = text.trim();
-        if text.is_empty() || text.len() > MAX_ARGUMENT_BYTES {
-            return Err(format!(
-                "each of bytes must be 1 to {MAX_ARGUMENT_BYTES} characters"
-            ));
-        }
-        tokens.push(text.to_owned());
+        strings.push(text.to_owned());
     }
     let address = match arguments.get("address") {
         None | Some(Value::Null) => None,
-        Some(Value::String(address)) => Some(address.trim().to_owned()),
+        Some(Value::String(address)) => Some(address.clone()),
         Some(_) => return Err("address must be a string".into()),
     };
     let raw = match arguments.get("raw") {
@@ -520,17 +510,17 @@ fn ble_decode_arguments(
         Some(Value::Bool(raw)) => *raw,
         Some(_) => return Err("raw must be a boolean".into()),
     };
-    Ok((tokens, address, raw))
+    Ok(crate::ble_adv::DecodeRequest {
+        bytes: strings,
+        address,
+        raw,
+    })
 }
 
-/// The offline decode behind the `ble_decode` tool: the same decoder as `radar ble-adv`.
-fn ble_decode(tokens: &[String], address: Option<&str>, raw: bool) -> Result<Value, ToolError> {
-    let bytes = crate::ble_adv::parse_hex_tokens(tokens)?;
-    let report = crate::ble_adv::decode(&bytes, raw)?;
-    let report = match address {
-        Some(address) => crate::ble_adv::with_address(report, address)?,
-        None => report,
-    };
+/// The offline decode behind the `ble_decode` tool: the same decoder as `radar ble-adv` and
+/// `POST /api/ble/decode`.
+fn ble_decode(request: &crate::ble_adv::DecodeRequest) -> Result<Value, ToolError> {
+    let report = crate::ble_adv::decode_request(request)?;
     serde_json::to_value(report).map_err(|error| format!("report could not be encoded: {error}"))
 }
 

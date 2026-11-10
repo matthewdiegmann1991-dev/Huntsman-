@@ -134,6 +134,11 @@ const OSINT_CASE_PATH: &str = "/api/osint/case";
 const OSINT_MATRIX_PATH: &str = "/api/osint/matrix";
 const OSINT_RISK_PATH: &str = "/api/osint/area-risk";
 const INVESTIGATE_PATH: &str = "/api/investigate";
+/// `POST /api/ble/decode`: the bytes of a Bluetooth LE advertisement a scanner showed, decoded
+/// offline by [`crate::ble_adv`] as `radar ble-adv` and the MCP `ble_decode` tool decode them.
+/// The body is the JSON of a [`crate::ble_adv::DecodeRequest`], read whole within
+/// [`MAX_FORM_BYTES`].
+const BLE_DECODE_PATH: &str = "/api/ble/decode";
 /// Explicit, source-scoped keyless people discovery. Body carries the name so
 /// neither browser history nor routine URL logs expose the search subject.
 const PEOPLE_DISCOVER_PATH: &str = "/api/people/discover";
@@ -1473,6 +1478,7 @@ fn protected_path(path: &str) -> bool {
             | OSINT_RISK_PATH
             | OSINT_MATRIX_PATH
             | INVESTIGATE_PATH
+            | BLE_DECODE_PATH
     ) || ScanApi::handles(path)
 }
 
@@ -1574,6 +1580,7 @@ fn route(
             osint_offline_response(parsed, OfflineOsintMode::WorkspaceOverlaps)
         }
         INVESTIGATE_PATH => investigate_response(parsed, routes.investigate.as_ref()),
+        BLE_DECODE_PATH => ble_decode_response(parsed),
         "/favicon.svg" => response(200, "image/svg+xml", FAVICON_SVG, head),
         "/favicon.ico" => response(204, "image/x-icon", "", head),
         _ => response(404, "text/plain; charset=utf-8", "not found\n", head),
@@ -1643,8 +1650,8 @@ mod page;
 mod response;
 mod settings;
 use analysis::{
-    OfflineOsintMode, analyze_response, inspect_response, investigate_response,
-    osint_offline_response, rhinser_native_response,
+    OfflineOsintMode, analyze_response, ble_decode_response, inspect_response,
+    investigate_response, osint_offline_response, rhinser_native_response,
 };
 use guard::{authorized, host_allowed, page_refusal, takes_post};
 use lookup::{lookup_response, scans_response, sensor_response};

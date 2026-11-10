@@ -12,7 +12,7 @@
 //! unless the operator asks for it, because such payloads carry rotating identifiers and
 //! application data.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ble_address::{self, BleAddressKind};
 use crate::bt_company;
@@ -21,6 +21,49 @@ use crate::oui;
 /// The most hex an operator can hand the decoder: a legacy advertisement and scan response are
 /// 31 bytes each, an extended advertisement at most 1,650.
 pub const MAX_ADVERTISEMENT_BYTES: usize = 4096;
+/// The most hex strings one decode request takes.
+pub const MAX_DECODE_TOKENS: usize = 64;
+/// The most characters one hex string may have.
+pub const MAX_DECODE_TOKEN_CHARS: usize = 8192;
+
+/// One decode request as the MCP `ble_decode` tool and `POST /api/ble/decode` take it: the hex
+/// strings in order, the device address if the scanner showed it, and whether payload bytes are
+/// wanted.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecodeRequest {
+    pub bytes: Vec<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub raw: bool,
+}
+
+/// Decodes a request: bounds its strings, then [`parse_hex_tokens`], [`decode`] and, with an
+/// address, [`with_address`]. **Pure.**
+///
+/// # Errors
+/// No strings, too many, one too long or empty, or what the decoder refuses, in words.
+pub fn decode_request(request: &DecodeRequest) -> Result<BleAdvReport, String> {
+    if request.bytes.is_empty() || request.bytes.len() > MAX_DECODE_TOKENS {
+        return Err(format!("bytes must hold 1 to {MAX_DECODE_TOKENS} strings"));
+    }
+    let mut tokens = Vec::with_capacity(request.bytes.len());
+    for text in &request.bytes {
+        let text = text.trim();
+        if text.is_empty() || text.len() > MAX_DECODE_TOKEN_CHARS {
+            return Err(format!(
+                "each of bytes must be 1 to {MAX_DECODE_TOKEN_CHARS} characters"
+            ));
+        }
+        tokens.push(text.to_owned());
+    }
+    let report = decode(&parse_hex_tokens(&tokens)?, request.raw)?;
+    match request.address.as_deref().map(str::trim) {
+        Some(address) if !address.is_empty() => with_address(report, address),
+        _ => Ok(report),
+    }
+}
 
 /// One AD structure as it appeared, by type and length, in order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -725,6 +768,45 @@ mod tests {
         let report = decode(&[0x03, 0xFF, 0xFF, 0xFF], false).unwrap();
         assert_eq!(report.manufacturer[0].company, None);
         assert!(render(&report).contains("unassigned identifier"));
+    }
+
+    #[test]
+    fn a_request_is_bounded_and_decoded_the_same_way() {
+        let request = DecodeRequest {
+            bytes: vec![" 01:06 ".into(), "ff:750093f6".into()],
+            address: Some("67:06:21:95:C1:7C".into()),
+            raw: true,
+        };
+        let report = decode_request(&request).unwrap();
+        assert_eq!(
+            report.manufacturer[0].company,
+            Some("Samsung Electronics Co. Ltd.")
+        );
+        assert_eq!(report.manufacturer[0].payload_hex.as_deref(), Some("93f6"));
+        assert_eq!(report.address.as_ref().unwrap().kind, "resolvable_private");
+        let empty = DecodeRequest {
+            bytes: Vec::new(),
+            address: None,
+            raw: false,
+        };
+        assert!(decode_request(&empty).unwrap_err().contains("1 to"));
+        let blank = DecodeRequest {
+            bytes: vec!["   ".into()],
+            address: None,
+            raw: false,
+        };
+        assert!(decode_request(&blank).is_err());
+        let too_many = DecodeRequest {
+            bytes: vec!["01:06".into(); MAX_DECODE_TOKENS + 1],
+            address: None,
+            raw: false,
+        };
+        assert!(decode_request(&too_many).is_err());
+        // The JSON shape the web route and the MCP tool read; an unknown field is refused.
+        let parsed: DecodeRequest =
+            serde_json::from_str(r#"{"bytes":["020106"],"address":"67:06:21:95:C1:7C"}"#).unwrap();
+        assert!(!parsed.raw);
+        assert!(serde_json::from_str::<DecodeRequest>(r#"{"bytes":["020106"],"x":1}"#).is_err());
     }
 
     #[test]
