@@ -889,11 +889,21 @@ pub(in crate::cli) fn company_cmd(args: &[String]) -> ExitCode {
         Err(e) => return usage_failure(&e, COMPANY_USAGE),
     };
     let keys = crate::cli::credentials::lookup_keys();
+    // The kept registers download over the threat feeds' large-body transport and are kept
+    // beside the feeds, as the people lookup keeps them.
+    let lists = huntsman_recon::sanctions::Lists::new(
+        Box::new(transport(
+            &threat_feeds::transport_config(),
+            &Selection::all(),
+        )),
+        crate::cli::scans::default_feed_dir(),
+    );
     let transport = transport(&api_leg::transport_config(), &Selection::all());
-    match source_report(company_cli::run(
+    match source_report(company_cli::run_with_lists(
         &transport,
         &keys,
         &parsed.query,
+        &lists,
         clock::unix_now(),
     )) {
         Ok((text, _)) => {

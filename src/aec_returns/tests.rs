@@ -4,7 +4,7 @@ use crate::test_support::RoutedTransport;
 /// The archive as the AEC published it on 2026-11-10: thirteen CSV tables, each with its own
 /// header; here the four a name lookup reaches first, with rows for one donor, one company and
 /// one party, and the rest empty.
-fn archive() -> Vec<u8> {
+pub(crate) fn archive() -> Vec<u8> {
     let table = |file: &str, body: &str| (file.to_owned(), body.as_bytes().to_vec());
     let mut entries = vec![
         table(
@@ -43,7 +43,7 @@ fn archive() -> Vec<u8> {
     crate::xlsx::stored_zip(&entries)
 }
 
-fn transport() -> RoutedTransport {
+pub(crate) fn transport() -> RoutedTransport {
     RoutedTransport::new(&[]).with_bytes(ARCHIVE.url, 200, archive())
 }
 
@@ -239,4 +239,42 @@ fn slugs_are_lowercase_dashed_words() {
     assert_eq!(slug(" Mineralogy Pty. Ltd "), "mineralogy-pty-ltd");
     assert_eq!(slug("2023-24"), "2023-24");
     assert_eq!(slug("--"), "");
+}
+
+/// An ABN or ACN is looked for in the returns that carry one, its digits compared whatever the
+/// spacing; the row is named by the return's own name, and a number with no digits asks nothing.
+#[test]
+fn an_abn_matches_the_third_party_return_that_carries_it() {
+    let (entities, outcome) =
+        check_id(&transport(), None, "12 345 678 901", "scan", 1).expect("asked");
+    assert_eq!(outcome.kind, SourceOutcomeKind::Success, "{outcome:?}");
+    assert_eq!(outcome.found, Some(1));
+    assert_eq!(entities.len(), 1);
+    let evidence = &entities[0].evidence[0];
+    assert_eq!(
+        evidence
+            .attributes
+            .get("matched_column")
+            .map(String::as_str),
+        Some("ABN")
+    );
+    assert_eq!(
+        evidence.attributes.get("matched_name").map(String::as_str),
+        Some("Advance Australia Ltd")
+    );
+    assert_eq!(
+        evidence.attributes.get("abn").map(String::as_str),
+        Some("12345678901")
+    );
+    assert!(
+        entities[0]
+            .raw_value
+            .ends_with("#third-party-return/2023-24/advance-australia-ltd"),
+        "{}",
+        entities[0].raw_value
+    );
+    let (none, outcome) = check_id(&transport(), None, "99999999999", "scan", 1).expect("asked");
+    assert!(none.is_empty());
+    assert_eq!(outcome.kind, SourceOutcomeKind::ValidZero);
+    assert!(check_id(&transport(), None, "no digits", "scan", 1).is_none());
 }
