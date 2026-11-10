@@ -18,10 +18,13 @@ so an MCP client (Claude Desktop, Claude Code, Cursor and other LLM applications
 binary as a tool. One JSON-RPC message per line in each direction; nothing else is written to \
 standard output. Tools: lookup (every typed lookup and the public news, notices, web and \
 dossier searches), people_discover and research, each running exactly as serve's JSON API runs \
-it, with the same keys and the same public-only egress; and investigate (the selectors in a \
-text) and analyze (the offline multi-hop analysis of up to 16 seeds), which make no request. Register it with a client by its \
-absolute path, for example: claude mcp add huntsman -- /path/to/huntsman-recon mcp. Makes \
-network requests when a tool is called; none at start-up.";
+it, with the same keys and the same public-only egress; investigate (the selectors in a text), \
+analyze (the offline multi-hop analysis of up to 16 seeds) and ble_decode (the bytes of a \
+Bluetooth LE advertisement a scanner showed), which make no request; and radar_wifi, \
+radar_cells and radar_track, which read this device's OS-cached radio sightings through \
+Termux:API as radar does, on an Android phone only. Register it with a client by its absolute \
+path, for example: claude mcp add huntsman -- /path/to/huntsman-recon mcp. Makes network \
+requests when a live tool is called; none at start-up.";
 
 /// The live tools: `serve`'s own lookup, discovery and research adapters.
 struct Live;
@@ -58,6 +61,23 @@ impl Tools for Live {
         // No saved-scan history: `serve --history DIR` bridges one, this server has no directory.
         super::service::web_analyze(seeds, None).map_err(refusal)
     }
+
+    fn radar_wifi(&self) -> Result<Value, ToolError> {
+        encode(super::service::web_radar().map_err(refusal)?)
+    }
+
+    fn radar_cells(&self) -> Result<Value, ToolError> {
+        encode(super::service::web_cells().map_err(refusal)?)
+    }
+
+    fn radar_track(&self) -> Result<Value, ToolError> {
+        encode(super::service::web_track().map_err(refusal)?)
+    }
+}
+
+/// A radar report as the JSON the tool returns.
+fn encode<T: serde::Serialize>(report: T) -> Result<Value, ToolError> {
+    serde_json::to_value(report).map_err(|error| format!("report could not be encoded: {error}"))
 }
 
 pub(super) fn mcp_cmd(args: &[String]) -> ExitCode {
