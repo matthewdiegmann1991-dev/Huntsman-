@@ -106,8 +106,10 @@ pub(super) fn lookup_value(report: &LookupReport) -> Result<serde_json::Value, s
 /// `GET /api/lookup`: one lookup, answered with its report. With saved scans on, the lookup runs
 /// as a saved scan, so it is kept, listed under Scans, can be stopped there, and reads `ABORTED`
 /// after a server that stopped mid-lookup starts again; the answer names it. Without them the
-/// installed handler runs it and nothing is kept, as there is nowhere to keep it. Either way the
-/// request waits at most [`Lookups::wait`] and then answers `504`.
+/// installed handler runs it and nothing is kept, as there is nowhere to keep it. A public search
+/// (`news`, `notices`, `web`, `dossier`) is the handler's own route, which the scan planner has no
+/// kind for: it runs live and is not kept, saved scans or not. Either way the request waits at
+/// most [`Lookups::wait`] and then answers `504`.
 pub(super) fn lookup_response(
     parsed: &ParsedRequest<'_>,
     lookups: Option<&Lookups>,
@@ -129,7 +131,10 @@ pub(super) fn lookup_response(
         Err(message) => return json_error(400, message),
     };
     let until = Instant::now() + lookups.wait;
-    if let Some(scans) = scans {
+    // The scan planner has no kind for a public search, so routing one through it refused the
+    // search as an unknown scan kind whenever a scan directory existed.
+    let public_search = crate::public_osint::Source::parse(&query.kind).is_some();
+    if let Some(scans) = scans.filter(|_| !public_search) {
         let service = Arc::clone(scans.service());
         // Reading and encoding the saved report needs more stack than a connection has.
         let worker = thread::Builder::new()

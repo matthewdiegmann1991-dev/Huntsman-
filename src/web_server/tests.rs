@@ -1851,6 +1851,35 @@ fn a_lookup_with_saved_scans_is_kept_as_a_scan_and_names_it() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The public searches (`news`, `notices`, `web`, `dossier`) are the installed handler's own
+/// routes, which the scan planner has no kind for: with saved scans on they run live, as every
+/// lookup runs without saved scans, and nothing is kept. Before, a scan directory (any `HOME`)
+/// made `/api/lookup` refuse each of them as an unknown scan kind.
+#[test]
+fn a_public_search_with_saved_scans_runs_live_and_is_not_kept() {
+    let lookup: crate::scan_service::ScanLookup =
+        Arc::new(|_, _, _| Err("the scan runner must not see a public search".into()));
+    let (routes, dir) = saved_lookup_routes("public", lookup, Duration::from_secs(10));
+    for (kind, _) in crate::public_osint::Source::NAMED {
+        let got = scans_request(
+            &routes,
+            None,
+            &format!("GET /api/lookup?kind={kind}&q=example.com HTTP/1.1\r\n{HEADER}\r\n"),
+        );
+        assert!(got.starts_with("HTTP/1.1 200"), "{kind}: {got}");
+        let body: serde_json::Value =
+            serde_json::from_str(&got[got.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert_eq!(body["text"], format!("{kind}|example.com"), "{kind}: {got}");
+        assert!(body["scan"].is_null(), "{kind}: {got}");
+    }
+    // A typed lookup still runs as a saved scan, and the public searches kept nothing.
+    let typed = scans_request(&routes, None, &format!("{PHONE_LOOKUP}{HEADER}\r\n"));
+    assert!(typed.starts_with("HTTP/1.1 502"), "{typed}");
+    let api = routes.scans.as_ref().unwrap();
+    assert_eq!(api.service().store().list().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn a_lookup_past_its_wait_answers_504_and_its_scan_runs_on_and_is_joined() {
     let gate = Arc::new(Mutex::new(()));
