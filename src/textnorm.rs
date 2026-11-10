@@ -289,6 +289,63 @@ pub fn name_tokens(full: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether `text` carries every word of `query` as a name token: for each word, some run of
+/// letters in `text` two or more characters long lowercases to it. Exactly whether
+/// [`name_tokens`]`(text)` holds every word, decided without splitting `text` or allocating, so
+/// every row of a list can be asked before any is parsed: a row that cannot carry the name is
+/// never split, and a cell that is asked afterwards answers the same. **Pure.**
+#[must_use]
+pub fn carries_name(text: &str, query: &[String]) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    if query.len() > 64 {
+        return query.iter().all(|word| has_name_token(text, word));
+    }
+    let every = if query.len() == 64 {
+        u64::MAX
+    } else {
+        (1_u64 << query.len()) - 1
+    };
+    let mut carried = 0_u64;
+    for run in letter_runs(text) {
+        for (index, word) in query.iter().enumerate() {
+            if carried & (1 << index) == 0 && run_is_word(run, word) {
+                carried |= 1 << index;
+            }
+        }
+        if carried == every {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether some run of letters in `text` lowercases to `word`. **Pure.**
+fn has_name_token(text: &str, word: &str) -> bool {
+    letter_runs(text).any(|run| run_is_word(run, word))
+}
+
+/// The runs of letters in `text` that [`name_tokens`] keeps: two or more characters long.
+fn letter_runs(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !c.is_alphabetic())
+        .filter(|run| run.chars().nth(1).is_some())
+}
+
+/// Whether `run` lowercases to `word`, as [`name_tokens`] lowercases it: a run of ASCII letters
+/// is compared in place, any other run through the same lowercasing. **Pure.**
+fn run_is_word(run: &str, word: &str) -> bool {
+    if run.is_ascii() {
+        run.len() == word.len()
+            && run
+                .bytes()
+                .zip(word.bytes())
+                .all(|(letter, wanted)| letter.to_ascii_lowercase() == wanted)
+    } else {
+        run.to_lowercase() == word
+    }
+}
+
 /// The text of every `<tag>…</tag>` in `block`, unescaped, in order; an element with attributes
 /// is not matched. **Pure.**
 #[must_use]
@@ -431,6 +488,17 @@ pub fn ascii_digits_and_plus(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_ascii_digit() || *c == '+')
         .collect()
+}
+
+/// Parse a bare ASCII decimal as a 32-bit number. This is the common syntax gate for
+/// ASN classification and public ASN target normalisation; prefix and assignment policy
+/// remain with their respective callers. **Pure.**
+#[must_use]
+pub(crate) fn parse_ascii_decimal_u32(digits: &str) -> Option<u32> {
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// Parse `AS13335`, `as13335`, or `13335`.
@@ -962,6 +1030,26 @@ mod tests {
     }
 
     #[test]
+    fn ascii_decimal_u32_is_strict_and_bounds_checked() {
+        for (raw, expected) in [
+            ("0", Some(0)),
+            ("00013335", Some(13_335)),
+            ("4294967295", Some(u32::MAX)),
+            ("", None),
+            ("4294967296", None),
+            ("+13335", None),
+            ("-1", None),
+            (" 13335", None),
+            ("13335 ", None),
+            ("13x35", None),
+            ("AS13335", None),
+            ("１２３", None),
+        ] {
+            assert_eq!(super::parse_ascii_decimal_u32(raw), expected, "{raw:?}");
+        }
+    }
+
+    #[test]
     fn digits_and_asn_helpers_work() {
         assert_eq!(ascii_digits("+61 (4) 123-456"), "614123456");
         assert_eq!(ascii_digits_and_plus("+61 (4) 123-456"), "+614123456");
@@ -1059,6 +1147,88 @@ mod tests {
         assert!(shares_whole_word_token("ÉMILE ZOLA", "émile"));
         // A letter with an accent is a different letter from its plain form.
         assert!(!whole_word_token_match("ZOLA, EMILE", "émile zola"));
+    }
+
+    /// `carries_name` is `name_tokens` containment, decided in place: the same answer for every
+    /// row shape a list can hold (quoted cells, apostrophes, accents, Greek sigmas that
+    /// lowercase by their position, the dotted capital I, digits, initials) and for words that
+    /// are letters of a longer token.
+    #[test]
+    fn carries_name_is_name_tokens_containment_without_splitting() {
+        let contained = |text: &str, query: &[String]| {
+            let have = name_tokens(text);
+            query.iter().all(|word| have.contains(word))
+        };
+        let words = |name: &str| name_tokens(name);
+        for (text, name, expected) in [
+            ("\"KIM, Jong Un\",\"individual\"", "jong un kim", true),
+            ("O'Brien-Smith;7200;P", "brien smith", true),
+            ("Mohammed Zahir KHARBOUTLI", "bout", false),
+            ("ZOLA, ÉMILE", "émile zola", true),
+            ("ZOLA, EMILE", "émile zola", false),
+            ("ΟΔΥΣΣΕΥΣ ΕΛΥΤΗΣ", "οδυσσευς ελυτης", true),
+            // The dotted capital I lowercases to two code points, the second no letter: the
+            // word asked splits there and the city is not found, split or in place.
+            ("İSTANBUL Ltd", "i̇stanbul", false),
+            ("É Lovelace", "lovelace", true),
+            // A one-letter word is an initial, asked of nothing.
+            ("É Lovelace", "é lovelace", true),
+            ("Ada Lovelace", "", true),
+            ("", "ada", false),
+            ("12 345 678 901,Ada", "ada", true),
+            // The words of a name are its lowercased tokens, whatever case it was typed in.
+            ("ada", "ADA", true),
+        ] {
+            let query = words(name);
+            assert_eq!(
+                carries_name(text, &query),
+                expected,
+                "{text:?} carries {name:?}"
+            );
+            assert_eq!(
+                carries_name(text, &query),
+                contained(text, &query),
+                "{text:?} {name:?}"
+            );
+        }
+        // An uppercase word is never a token, in place or split.
+        assert!(!carries_name("ada", &["ADA".to_owned()]));
+        // Many thousands of generated rows over an alphabet of the awkward cases agree.
+        const ALPHABET: [&str; 20] = [
+            "a", "b", "B", "é", "É", "Σ", "σ", "ς", "İ", "i", "ß", "ẞ", "'", "\"", ",", ";", " ",
+            "1", "-", "\u{307}",
+        ];
+        fn next(state: &mut u64) -> u64 {
+            *state ^= *state << 13;
+            *state ^= *state >> 7;
+            *state ^= *state << 17;
+            *state
+        }
+        fn generated(state: &mut u64, length: u64) -> String {
+            (0..length)
+                .map(|_| ALPHABET[usize::try_from(next(state) % 20).unwrap_or(0)])
+                .collect()
+        }
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        for _ in 0..4000 {
+            let length = 1 + next(&mut state) % 24;
+            let text = generated(&mut state, length);
+            let length = 1 + next(&mut state) % 8;
+            let mut query = name_tokens(&generated(&mut state, length));
+            if next(&mut state).is_multiple_of(3) {
+                // Half the queries draw their words from the text itself.
+                query.extend(name_tokens(&text).into_iter().take(2));
+            }
+            assert_eq!(
+                carries_name(&text, &query),
+                contained(&text, &query),
+                "{text:?} {query:?}"
+            );
+        }
+        // More than sixty-four words are asked one by one.
+        let many: Vec<String> = (0..70).map(|_| "ada".to_owned()).collect();
+        assert!(carries_name("Ada Lovelace", &many));
+        assert!(!carries_name("Lovelace", &many));
     }
 
     #[test]

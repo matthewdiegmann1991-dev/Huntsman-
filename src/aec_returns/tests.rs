@@ -233,6 +233,31 @@ fn a_kept_copy_past_its_week_answers_without_current_clearance() {
     std::fs::remove_dir_all(dir).expect("test cleanup");
 }
 
+/// A row is asked whether it may hold the name or number before it is split: the answer is the
+/// criterion's over the whole row, so a row that cannot match is never split and a row that
+/// may is then asked cell by cell.
+#[test]
+fn a_row_is_split_only_when_it_may_hold_the_name_or_number() {
+    let palmer = Matcher::Name(crate::textnorm::name_tokens("Clive Palmer"));
+    assert!(may_match(
+        "2023-24,\"PALMER, Clive\",\"Mineralogy Pty Ltd\",250000",
+        &palmer
+    ));
+    assert!(
+        may_match("2023-24,Clive,Palmer,250000", &palmer),
+        "across cells: asked, then refused by the cells"
+    );
+    assert!(!may_match("2023-24,\"Palmerston North\",Clive,1", &palmer));
+    let abn = Matcher::Id("12345678901".to_owned());
+    assert!(may_match(
+        "Advance Australia,\"12 345 678 901\",2024-25",
+        &abn
+    ));
+    assert!(may_match("Advance Australia,12345678901,2024-25", &abn));
+    assert!(!may_match("Advance Australia,12 345 678 90,2024-25", &abn));
+    assert!(!may_match("Advance Australia,,2024-25", &abn));
+}
+
 #[test]
 fn slugs_are_lowercase_dashed_words() {
     assert_eq!(slug("Clive Frederick Palmer"), "clive-frederick-palmer");
