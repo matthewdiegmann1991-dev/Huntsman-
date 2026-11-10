@@ -19,8 +19,16 @@
 # half-written binary behind.
 set -euo pipefail
 
-# HUNTSMAN_REPO=OWNER/NAME installs a release published by another copy, such as a fork.
-REPO="${HUNTSMAN_REPO:-EmmmmDeee/Huntsman-Search-Engine-HSE-Termux-Android-Aarch64-Rust-}"
+# The repository whose release this copy installs. The release job stamps the publishing
+# repository into RECON_REPO_DEFAULT, so a copy downloaded from a release installs from the
+# repository that published it, whatever that repository is called; the checkout's copy, left
+# unstamped, installs from the repository named below. HUNTSMAN_REPO=OWNER/NAME installs a
+# release published by another copy, such as a fork.
+RECON_REPO_DEFAULT="@RECON_REPO@"
+case "$RECON_REPO_DEFAULT" in
+  @*@) RECON_REPO_DEFAULT="EmmmmDeee/Huntsman-Search-Engine-HSE-Termux-Android-Aarch64-Rust-" ;;
+esac
+REPO="${HUNTSMAN_REPO:-$RECON_REPO_DEFAULT}"
 RECON_TAG_DEFAULT="@RECON_TAG@"
 CHANNEL="${HUNTSMAN_CHANNEL:-recon}"
 

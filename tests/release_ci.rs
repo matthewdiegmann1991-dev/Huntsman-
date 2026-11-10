@@ -703,6 +703,11 @@ fn publishing_requires_release_build_and_zero_finding_key_scan() {
         "grep -qx \"result: PASS (0 findings)\" key-scan-report.txt",
         "dist/key-scan-report.txt",
         "has no digest for asset",
+        // The published installer is stamped with its tag and its publishing repository, and
+        // the job proves both stamps took before it publishes.
+        "-e \"s/@RECON_TAG@/${TAG}/g\" -e \"s#@RECON_REPO@#${GITHUB_REPOSITORY}#g\"",
+        "grep -qF \"RECON_TAG_DEFAULT=\\\"${TAG}\\\"\" dist/install-termux.sh",
+        "grep -qF \"RECON_REPO_DEFAULT=\\\"${GITHUB_REPOSITORY}\\\"\" dist/install-termux.sh",
     ] {
         assert!(wf.contains(required), "{RELEASE} must contain {required:?}");
     }
@@ -711,6 +716,8 @@ fn publishing_requires_release_build_and_zero_finding_key_scan() {
         "CHANNEL=\"${HUNTSMAN_CHANNEL:-recon}\"",
         "TAG=\"${HSE_TAG:-main-7dca720}\"",
         "RECON_TAG_DEFAULT=\"@RECON_TAG@\"",
+        "RECON_REPO_DEFAULT=\"@RECON_REPO@\"",
+        "REPO=\"${HUNTSMAN_REPO:-$RECON_REPO_DEFAULT}\"",
         "releases/download/${TAG}",
         "sha256sum -c",
         "$PREFIX/bin/$DEST_NAME",
@@ -1449,8 +1456,14 @@ fn installer_tools_present() -> bool {
 }
 
 fn installer_sha_line(tag: &str, bytes: &[u8]) -> String {
+    // Tests run in parallel and several use the same tags: each call probes in its own
+    // directory, or one test's clean-up empties another's probe mid-hash.
+    static PROBES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let asset = "huntsman-recon-aarch64-linux-android";
-    let probe = scratch(tag);
+    let probe = scratch(&format!(
+        "{tag}-probe-{}",
+        PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     fs::write(probe.join("b"), bytes).unwrap();
     let line = format!("{}  {asset}\n", sha256_hex(&probe.join("b")));
     let _ = fs::remove_dir_all(&probe);
@@ -1722,6 +1735,21 @@ esac
 if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
 "#;
 
+/// The repository the checkout's unstamped installer installs from: the fallback its `case`
+/// sets when `RECON_REPO_DEFAULT` still holds the placeholder.
+fn unstamped_default_repo(script: &str) -> String {
+    script
+        .lines()
+        .filter(|line| !line.contains("@RECON_REPO@"))
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("@*@) RECON_REPO_DEFAULT=\"")
+                .and_then(|rest| rest.split('"').next())
+        })
+        .expect("the installer names the repository an unstamped copy installs from")
+        .to_owned()
+}
+
 /// Runs `script` as the Termux installer for the recon channel without `HUNTSMAN_RELEASE_TAG`.
 /// `refs[n]` is the commit id of `main~n`; `released` are the commit ids with a published recon
 /// build. Returns (exit code, output, URLs asked for, scratch root).
@@ -1731,6 +1759,18 @@ fn run_tag_resolving_installer(
     refs: &[String],
     released: &[&str],
     expected_sha: &str,
+) -> (Option<i32>, String, String, PathBuf) {
+    run_tag_resolving_installer_as(name, script, refs, released, expected_sha, &[])
+}
+
+/// As [`run_tag_resolving_installer`], with `extra` environment variables set for the run.
+fn run_tag_resolving_installer_as(
+    name: &str,
+    script: &Path,
+    refs: &[String],
+    released: &[&str],
+    expected_sha: &str,
+    extra: &[(&str, &str)],
 ) -> (Option<i32>, String, String, PathBuf) {
     let root = scratch(&format!("resolve-{name}"));
     let (assets, fakes, prefix) = (root.join("assets"), root.join("fakes"), root.join("prefix"));
@@ -1777,6 +1817,8 @@ fn run_tag_resolving_installer(
         .env("HUNTSMAN_CHANNEL", "recon")
         .env("HUNTSMAN_TEST_BUILD_SHA", expected_sha)
         .env_remove("HUNTSMAN_RELEASE_TAG")
+        .env_remove("HUNTSMAN_REPO")
+        .envs(extra.iter().copied())
         .output()
         .expect("bash must run");
     let text =
@@ -1787,6 +1829,79 @@ fn run_tag_resolving_installer(
         fs::read_to_string(&log).unwrap(),
         root,
     )
+}
+
+/// A copy downloaded from a release installs from the repository that published it, whatever
+/// that repository is called: the release job stamps the publisher in beside the tag. The
+/// checkout's unstamped copy installs from its named default, and `HUNTSMAN_REPO` overrides
+/// either. Before the stamp, a release of any other copy of this repository told its users to
+/// run an installer that fetched the original repository's release of the same tag, which that
+/// repository had never published.
+#[test]
+fn a_release_stamped_installer_installs_from_the_repository_that_published_it() {
+    if !installer_tools_present() {
+        return;
+    }
+    let source = fs::read_to_string(INSTALL).unwrap();
+    let fallback = unstamped_default_repo(&source);
+    let stamped_dir = scratch("stamped-publisher");
+    let stamped = stamped_dir.join("install-termux.sh");
+    fs::write(
+        &stamped,
+        source
+            .replace("@RECON_TAG@", "main-eeeeeee")
+            .replace("@RECON_REPO@", "example-owner/Huntsman-"),
+    )
+    .unwrap();
+    let refs = [commit_id('a'), commit_id('e')];
+    let released = [&refs[0][..], &refs[1][..]];
+
+    let (code, text, urls, root) =
+        run_tag_resolving_installer("publisher", &stamped, &refs, &released, &refs[1]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        urls.contains("https://github.com/example-owner/Huntsman-/releases/download/main-eeeeeee/"),
+        "{urls}"
+    );
+    assert!(
+        !urls.contains(&fallback),
+        "the publisher's copy never asks the original: {urls}"
+    );
+    let _ = fs::remove_dir_all(&root);
+
+    // The operator's own choice still wins over the stamp.
+    let (code, text, urls, root) = run_tag_resolving_installer_as(
+        "publisher-override",
+        &stamped,
+        &refs,
+        &released,
+        &refs[1],
+        &[("HUNTSMAN_REPO", "other-owner/Other")],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        urls.contains("https://github.com/other-owner/Other/releases/download/main-eeeeeee/"),
+        "{urls}"
+    );
+    assert!(!urls.contains("example-owner"), "{urls}");
+    let _ = fs::remove_dir_all(&root);
+
+    // The checkout's copy, unstamped, installs the newest published build (the head here)
+    // from its named default.
+    let (code, text, urls, root) = run_tag_resolving_installer(
+        "publisher-unstamped",
+        Path::new(INSTALL),
+        &refs,
+        &released,
+        &refs[0],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        urls.contains(&format!("https://github.com/{fallback}/releases/download/")),
+        "{urls}"
+    );
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&stamped_dir);
 }
 
 fn commit_id(digit: char) -> String {
@@ -1882,12 +1997,9 @@ fn a_release_stamped_installer_never_asks_the_api_for_a_tag() {
 #[test]
 fn install_doc_fetches_the_repository_installer_from_its_real_path() {
     let script = fs::read_to_string(INSTALL).unwrap();
-    // The default repository, which `HUNTSMAN_REPO=OWNER/NAME` can replace for another copy.
-    let repo = script
-        .lines()
-        .find_map(|line| line.strip_prefix("REPO=\"${HUNTSMAN_REPO:-"))
-        .and_then(|rest| rest.strip_suffix("}\""))
-        .expect("the installer names its default repository");
+    // The checkout copy's default repository, which the release job's stamp and
+    // `HUNTSMAN_REPO=OWNER/NAME` each replace.
+    let repo = unstamped_default_repo(&script);
     let url = format!("https://raw.githubusercontent.com/{repo}/main/{INSTALL}");
     let doc = fs::read_to_string("docs/INSTALL.md").unwrap();
     let section = doc
