@@ -244,10 +244,11 @@ const DOTS = want => { const n = [...document.querySelectorAll('#gnodes path:not
       page.off('request', observe);
       const created = submitted.ok() ? await submitted.json() : null;
       const stored = created && created.id ? await api(page, '/api/scans/' + created.id) : null;
+      // The target keeps its bytes; the name is the scan's label, which the server trims.
       check('exact SSID survives mobile form POST and saved-scan persistence',
         posts.length === 1 && posts[0].target === exact && posts[0].name === exact &&
         posts[0].kind === 'network' && posts[0].urlSearch === '' &&
-        stored && stored.target === exact && stored.name === exact && stored.kind === 'network',
+        stored && stored.target === exact && stored.name === exact.trim() && stored.kind === 'network',
         { posts, status: submitted.status(), stored: stored && { target: stored.target,
           name: stored.name, kind: stored.kind } });
       await ctx.close();
