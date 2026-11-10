@@ -23,6 +23,9 @@ use huntsman_recon::source_registry::routes_for;
 use huntsman_recon::textnorm::escape_controls;
 use huntsman_recon::web_query::{self, EngineSet};
 
+const INVESTIGATE_USAGE: &str =
+    "usage: huntsman-recon investigate TEXT... [--json] | investigate --file FILE [--json]";
+
 /// The actionable entities in `text`, each with the classifier's evidence, as `investigate`
 /// prints them and `POST /api/investigate` answers them: one authority for both.
 pub(in crate::cli) fn investigate_entities(text: &str) -> Vec<entity::Entity> {
@@ -31,11 +34,14 @@ pub(in crate::cli) fn investigate_entities(text: &str) -> Vec<entity::Entity> {
 }
 
 pub(in crate::cli) fn investigate_cmd(args: &[String]) -> ExitCode {
+    // `--json` is taken from wherever it was typed, as the typed lookups take it, so it is never
+    // read as part of the text to investigate.
+    let (args, json) = match super::profiles::take_json(args) {
+        Ok(split) => split,
+        Err(error) => return fail(EX_USAGE, &format!("{error}\n{INVESTIGATE_USAGE}")),
+    };
     if args.is_empty() {
-        return fail(
-            EX_USAGE,
-            "usage: huntsman-recon investigate TEXT... | investigate --file FILE",
-        );
+        return fail(EX_USAGE, INVESTIGATE_USAGE);
     }
 
     let entities = if args.first().is_some_and(|arg| arg == "--file") {
@@ -59,6 +65,20 @@ pub(in crate::cli) fn investigate_cmd(args: &[String]) -> ExitCode {
         }
         investigate_entities(&args.join(" "))
     };
+
+    if json {
+        // The one object `POST /api/investigate` answers and the MCP tool returns, on one line.
+        return match crate::cli::service::investigate_report(entities) {
+            Ok(report) => match serde_json::to_string(&report) {
+                Ok(line) => {
+                    println!("{line}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => fail(EX_DATAERR, &format!("report could not be encoded: {error}")),
+            },
+            Err(error) => fail(EX_DATAERR, &error.message),
+        };
+    }
 
     println!("entities={}", entities.len());
     for entity in &entities {

@@ -153,11 +153,11 @@ registry! {
     name: "scan", summary: "Route one selector or bounded seed-list into rebuilt lookup front-ends",
     synopsis: "scan SELECTOR [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save FILE] | scan --input-file FILE [-k people|email|exposure|username|phone|domain|ip|netblock|asn|network|crypto|geocode] [--save-dir DIR] | scan --recurse SELECTOR... [--max-generations N] [--expand-floor F] [--json]", run: super::lookup::scan_cmd;
     name: "investigate", summary: "Extract actionable entities from local text or one bounded file",
-    synopsis: "investigate TEXT...|--file FILE", run: super::lookup::investigate_cmd;
+    synopsis: "investigate TEXT... [--json]|--file FILE [--json]", run: super::lookup::investigate_cmd;
     name: "plan", summary: "Plan an offline investigation from seeds; save or reload it as a session",
     synopsis: "plan [--session-dir DIR] SEED... | plan --load-session DIR ID", run: super::lookup::plan_cmd;
     name: "research", summary: "Research any term using existing typed or keyless adaptive capabilities",
-    synopsis: "research [--plan] [--all] TERM...", run: super::research::research_cmd;
+    synopsis: "research [--plan] [--all] TERM... [--json]", run: super::research::research_cmd;
     name: "query", summary: "Keyless web search; --adaptive aggregates leads; --all asks 13 engines; --exa uses optional search credits",
     synopsis: "query [--adaptive] [--all] QUERY... | query --exa QUERY...", run: super::lookup::query_cmd;
     name: "privacy-audit", summary: "Assess a source-backed public entity graph offline (no network)",
