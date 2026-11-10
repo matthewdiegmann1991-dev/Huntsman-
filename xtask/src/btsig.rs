@@ -1,8 +1,10 @@
-//! The Bluetooth SIG company identifiers, packed for `huntsman_recon::bt_company`. `btsig pack`
-//! builds `src/bt_company.bin` from the SIG's YAML listing
-//! (<https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml>)
-//! and `btsig dump` lists a blob's identifiers, so a refresh is one command and two blobs can be
-//! diffed.
+//! The Bluetooth SIG's 16-bit assigned numbers, packed for `huntsman_recon::bt_company` and
+//! `huntsman_recon::bt_uuid`. `btsig pack` builds `src/bt_company.bin` from the SIG's company
+//! identifier listing
+//! (<https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml>),
+//! `btsig pack-uuids` builds `src/bt_uuid.bin` from its service and member UUID listings
+//! (`assigned_numbers/uuids/service_uuids.yaml` and `member_uuids.yaml`, merged), and `btsig dump`
+//! lists a blob, so a refresh is one command and two blobs can be diffed.
 //!
 //! The layout, little-endian throughout: the magic `HSEBTC\x01\x00`; the identifier count as a
 //! u32 and a reserved u32 of zero; the 16-bit identifiers as u16, strictly ascending; zero padding
@@ -17,11 +19,13 @@ use std::process::ExitCode;
 
 use crate::error::{self, Error, Result};
 
-const USAGE: &str = "usage: cargo run --locked -p xtask -- btsig <pack YAML OUT|dump BIN>
-  pack YAML OUT  pack the Bluetooth SIG company identifiers YAML
-                 (https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml)
-                 into OUT, the blob src/bt_company.bin embeds
-  dump BIN       print a blob's identifiers, one `ID<TAB>NAME` line each, id as four hex digits";
+const USAGE: &str = "usage: cargo run --locked -p xtask -- btsig <pack YAML OUT|pack-uuids OUT YAML...|dump BIN>
+  pack YAML OUT         pack the Bluetooth SIG company identifiers YAML
+                        (https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml)
+                        into OUT, the blob src/bt_company.bin embeds
+  pack-uuids OUT YAML...  pack the SIG's 16-bit UUID listings (assigned_numbers/uuids/service_uuids.yaml
+                        and member_uuids.yaml), merged, into OUT, the blob src/bt_uuid.bin embeds
+  dump BIN              print a blob's entries, one `ID<TAB>NAME` line each, id as four hex digits";
 
 const MAGIC: &[u8; 8] = b"HSEBTC\x01\x00";
 const HEADER: usize = 16;
@@ -37,6 +41,9 @@ pub struct Company {
 pub fn run(args: &[String]) -> ExitCode {
     let outcome = match args {
         [command, yaml, out] if command == "pack" => pack_file(Path::new(yaml), Path::new(out)),
+        [command, out, yamls @ ..] if command == "pack-uuids" && !yamls.is_empty() => {
+            pack_uuid_files(Path::new(out), yamls)
+        }
         [command, bin] if command == "dump" => dump_file(Path::new(bin)),
         _ => return error::usage(USAGE),
     };
@@ -53,10 +60,13 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     })
 }
 
+fn text_of(yaml: &Path) -> Result<String> {
+    String::from_utf8(read(yaml)?)
+        .map_err(|_| Error::Invalid(format!("{}: not UTF-8", yaml.display())))
+}
+
 fn pack_file(yaml: &Path, out: &Path) -> Result<()> {
-    let text = String::from_utf8(read(yaml)?)
-        .map_err(|_| Error::Invalid(format!("{}: not UTF-8", yaml.display())))?;
-    let companies = companies_from_yaml(&text)?;
+    let companies = companies_from_yaml(&text_of(yaml)?)?;
     let blob = pack(&companies)?;
     fs::write(out, &blob).map_err(|source| Error::Io {
         path: out.to_path_buf(),
@@ -66,6 +76,35 @@ fn pack_file(yaml: &Path, out: &Path) -> Result<()> {
         "{}: {} identifiers, {} bytes",
         out.display(),
         companies.len(),
+        blob.len()
+    );
+    Ok(())
+}
+
+/// Packs the SIG's 16-bit UUID listings, merged: a UUID in two files is refused.
+fn pack_uuid_files(out: &Path, yamls: &[String]) -> Result<()> {
+    let mut entries = Vec::new();
+    for yaml in yamls {
+        entries.extend(entries_from_yaml(&text_of(Path::new(yaml))?, "uuid")?);
+    }
+    entries.sort_by_key(|entry| entry.id);
+    for pair in entries.windows(2) {
+        if pair[0].id == pair[1].id {
+            return Err(Error::Invalid(format!(
+                "{:04X} is listed twice ({:?} and {:?})",
+                pair[0].id, pair[0].name, pair[1].name
+            )));
+        }
+    }
+    let blob = pack(&entries)?;
+    fs::write(out, &blob).map_err(|source| Error::Io {
+        path: out.to_path_buf(),
+        source,
+    })?;
+    println!(
+        "{}: {} UUIDs, {} bytes",
+        out.display(),
+        entries.len(),
         blob.len()
     );
     Ok(())
@@ -118,18 +157,31 @@ fn scalar(raw: &str) -> Result<String> {
     Ok(raw.to_owned())
 }
 
-/// Reads the SIG listing: `- value: 0xNNNN` lines each followed by a `name:` line. Identifiers
-/// come out ascending; a repeated identifier, an empty name or a stray line is refused.
+/// Reads the SIG's company identifier listing (`- value: 0xNNNN` items).
 pub fn companies_from_yaml(text: &str) -> Result<Vec<Company>> {
+    entries_from_yaml(text, "value")
+}
+
+/// Reads a SIG listing: `- KEY: 0xNNNN` lines each followed by a `name:` line, under one
+/// top-level heading. Entries come out ascending; a repeated identifier, an empty name or a stray
+/// line is refused.
+pub fn entries_from_yaml(text: &str, key: &str) -> Result<Vec<Company>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let item = format!("- {key}:");
     let mut companies: Vec<Company> = Vec::new();
     let mut pending: Option<u16> = None;
     for (number, line) in text.lines().enumerate() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed == "company_identifiers:" {
+        let heading = trimmed.ends_with(':')
+            && trimmed[..trimmed.len() - 1]
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '_');
+        // The UUID listings also carry each entry's textual `id:` (org.bluetooth.service.gap),
+        // which the blob does not keep.
+        if trimmed.is_empty() || trimmed.starts_with('#') || heading || trimmed.starts_with("id:") {
             continue;
         }
-        if let Some(value) = trimmed.strip_prefix("- value:") {
+        if let Some(value) = trimmed.strip_prefix(item.as_str()) {
             if pending.is_some() {
                 return Err(Error::Invalid(format!(
                     "line {}: a value without a name",
@@ -295,6 +347,24 @@ mod tests {
                 (0x004C, "Apple, Inc."),
                 (0x0075, "Samsung Electronics Co. Ltd."),
             ]
+        );
+    }
+
+    #[test]
+    fn a_uuid_listing_is_read_by_its_own_key() {
+        let listing = "uuids:\n - uuid: 0x180F\n   name: Battery\n - uuid: 0xFD5A\n   name: \"Samsung Electronics Co., Ltd.\"\n";
+        let entries = entries_from_yaml(listing, "uuid").unwrap();
+        let listed: Vec<(u16, &str)> = entries.iter().map(|c| (c.id, c.name.as_str())).collect();
+        assert_eq!(
+            listed,
+            [
+                (0x180F, "Battery"),
+                (0xFD5A, "Samsung Electronics Co., Ltd.")
+            ]
+        );
+        assert!(
+            entries_from_yaml(listing, "value").is_err(),
+            "the other key is a stray line"
         );
     }
 
