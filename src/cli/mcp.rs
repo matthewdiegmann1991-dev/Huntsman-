@@ -6,7 +6,7 @@ use std::io::{BufReader, Write};
 use std::process::ExitCode;
 
 use huntsman_recon::exit::{EX_IOERR, EX_USAGE};
-use huntsman_recon::mcp::{Server, ToolError, Tools};
+use huntsman_recon::mcp::{ScanView, Server, ToolError, Tools};
 use huntsman_recon::people_discovery::Region;
 use huntsman_recon::web_server::{LookupError, LookupQuery, lookup_json};
 use serde_json::Value;
@@ -20,9 +20,10 @@ standard output. Tools: lookup (every typed lookup and the public news, notices,
 dossier searches), people_discover and research, each running exactly as serve's JSON API runs \
 it, with the same keys and the same public-only egress; investigate (the selectors in a text), \
 investigate_file (the selectors and embedded metadata in one local file, by its path, as \
-investigate --file reads it), analyze (the offline multi-hop analysis of up to 16 seeds) and \
-ble_decode (the bytes of a Bluetooth LE advertisement a scanner showed), which make no request; \
-and radar_wifi, \
+investigate --file reads it), analyze (the offline multi-hop analysis of up to 16 seeds), \
+scans_list and scan_read (the scans serve and scan saved on this machine, as scans list and \
+show|summary|elements|correlations|log|analyze read them) and ble_decode (the bytes of a \
+Bluetooth LE advertisement a scanner showed), which make no request; and radar_wifi, \
 radar_cells and radar_track, which read this device's OS-cached radio sightings through \
 Termux:API as radar does, on an Android phone only. Register it with a client by its absolute \
 path, for example: claude mcp add huntsman -- /path/to/huntsman-recon mcp. Makes network \
@@ -66,6 +67,14 @@ impl Tools for Live {
     fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError> {
         // No saved-scan history: `serve --history DIR` bridges one, this server has no directory.
         super::service::web_analyze(seeds, None).map_err(refusal)
+    }
+
+    fn scans_list(&self) -> Result<Value, ToolError> {
+        super::service::web_scans_list().map_err(refusal)
+    }
+
+    fn scan_read(&self, id: &str, view: ScanView, kind: Option<&str>) -> Result<Value, ToolError> {
+        super::service::web_scan_read(id, view, kind).map_err(refusal)
     }
 
     fn radar_wifi(&self) -> Result<Value, ToolError> {

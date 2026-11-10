@@ -40,6 +40,65 @@ pub const MAX_ANALYZE_SEEDS: usize = 16;
 /// The longest text `investigate` reads from a call: far more than a model pastes, well within
 /// the message bound, and a quarter of what the command reads from a file in Termux.
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
+/// The longest saved-scan answer `scan_read` returns (512 KiB): a whole scan's elements can run
+/// to megabytes, which no model reads; past this the tool says so and names the narrower views.
+pub const MAX_SCAN_VIEW_BYTES: usize = 512 * 1024;
+
+/// What `scan_read` reads of one saved scan: each the answer of the scan API route `serve`
+/// serves and the `scans` subcommand prints, over the same saved files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanView {
+    /// The scan's row, its sources' outcomes and its report text: `scans show`.
+    Status,
+    /// The element counts by type: `scans summary`.
+    Summary,
+    /// The elements, each a typed finding with its source and parent: `scans elements`.
+    Elements,
+    /// The correlations the rules found: `scans correlations`.
+    Correlations,
+    /// The scan's log: `scans log`.
+    Log,
+    /// The offline multi-hop analysis of the scan's entities: `scans analyze`.
+    Analyze,
+}
+
+impl ScanView {
+    /// Every view, in the order the tool's schema lists them.
+    pub const ALL: [Self; 6] = [
+        Self::Status,
+        Self::Summary,
+        Self::Elements,
+        Self::Correlations,
+        Self::Log,
+        Self::Analyze,
+    ];
+
+    /// The view's name in the tool's `view` argument.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::Summary => "summary",
+            Self::Elements => "elements",
+            Self::Correlations => "correlations",
+            Self::Log => "log",
+            Self::Analyze => "analyze",
+        }
+    }
+
+    /// The scan API path of the view for scan `id`.
+    #[must_use]
+    pub fn path(self, id: &str) -> String {
+        match self {
+            Self::Status => format!("/api/scans/{id}"),
+            other => format!("/api/scans/{id}/{}", other.name()),
+        }
+    }
+
+    fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|view| view.name() == name)
+    }
+}
 
 /// The serialized size of the entities a summary lookup shows: about twelve thousand tokens, room
 /// for a model to reason over while the full report (megabytes for a busy IP address) stays one
@@ -104,6 +163,20 @@ pub trait Tools {
     /// # Errors
     /// Seeds the spine refuses, in words.
     fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError>;
+
+    /// The scans saved on this machine, as `scans list` and `GET /api/scans` list them: the
+    /// rows, newest first. Offline: no request, no key.
+    ///
+    /// # Errors
+    /// Why the saved scans could not be read (no scan directory, a store failure), in words.
+    fn scans_list(&self) -> Result<Value, ToolError>;
+
+    /// One saved scan's `view`, as the scan API answers it; `kind` narrows the elements view to
+    /// one Spiderfoot element type. Offline: no request, no key.
+    ///
+    /// # Errors
+    /// An unknown scan, a view too long to return, or a store failure, in words.
+    fn scan_read(&self, id: &str, view: ScanView, kind: Option<&str>) -> Result<Value, ToolError>;
 
     /// This device's OS-cached nearby Wi-Fi sightings, as `radar wifi` reads them through
     /// Termux:API; no scan is triggered and no request is made.
@@ -298,6 +371,16 @@ impl<'a, T: Tools + ?Sized> Server<'a, T> {
                 .and_then(|()| text_argument(arguments, "path", MAX_ARGUMENT_BYTES))
                 .and_then(|path| self.tools.investigate_file(&path)),
             "analyze" => analyze_arguments(arguments).and_then(|seeds| self.tools.analyze(&seeds)),
+            "scans_list" => refuse_unknown(arguments, &[])
+                .and_then(|()| self.tools.scans_list())
+                .map(|scans| {
+                    let count = scans.as_array().map_or(0, Vec::len);
+                    json!({ "count": count, "scans": scans })
+                }),
+            "scan_read" => scan_read_arguments(arguments).and_then(|(id, view, kind)| {
+                let report = self.tools.scan_read(&id, view, kind.as_deref())?;
+                Ok(json!({ "id": id, "view": view.name(), "report": report }))
+            }),
             "radar_wifi" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_wifi()),
             "radar_cells" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_cells()),
             "radar_track" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_track()),
@@ -325,7 +408,9 @@ investigate_file, analyze and ble_decode are offline (no request, no key): extra
 from a text with investigate, or from a local file (a photo, a PDF, a document, a text; its \
 embedded metadata too) with investigate_file by its path on this machine, look the interesting \
 ones up, then analyze the set for the links between them; ble_decode reads the bytes of a \
-Bluetooth LE advertisement a scanner showed. radar_wifi, \
+Bluetooth LE advertisement a scanner showed. scans_list and scan_read read, offline, the scans \
+serve and scan saved on this machine: list them, then read one's summary, elements (of one type \
+where a scan is large), correlations, log or offline analysis. radar_wifi, \
 radar_cells and radar_track read this device's own OS-cached radio sightings through Termux:API \
 when the server runs on an Android phone; elsewhere they say why they cannot.";
 
@@ -386,6 +471,8 @@ pub fn tool_definitions() -> Vec<Value> {
         investigate_tool(),
         investigate_file_tool(),
         analyze_tool(),
+        scans_list_tool(),
+        scan_read_tool(),
         ble_decode_tool(),
         radar_wifi_tool(),
         radar_cells_tool(),
@@ -734,6 +821,104 @@ fn analyze_tool() -> Value {
         },
         "annotations": offline_hints("Offline analysis of seeds"),
     })
+}
+
+/// The `scans_list` tool.
+fn scans_list_tool() -> Value {
+    json!({
+        "name": "scans_list",
+        "title": "List the scans saved on this machine",
+        "description": "Offline: no request, no key. The scans saved on this machine by serve, \
+    scan and the JSON API, as scans list and GET /api/scans list them: each its id, name, target, \
+    kind, status, times, element and correlation counts. Read one with scan_read.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("List the scans saved on this machine"),
+    })
+}
+
+/// The `scan_read` tool.
+fn scan_read_tool() -> Value {
+    let views: Vec<&str> = ScanView::ALL.iter().map(|view| view.name()).collect();
+    json!({
+        "name": "scan_read",
+        "title": "Read one saved scan",
+        "description": "Offline: no request, no key. One saved scan, by the id scans_list gave, \
+    as the scan API and the scans subcommand answer it: view summary (the default) counts its \
+    elements by type; status is its row, its sources' typed outcomes and its report text; \
+    elements lists every element (type, data, source module, parent), narrowed to one type with \
+    type, such as EMAILADDR or IP_ADDRESS, where a scan is large; correlations lists what the \
+    rules found; log its log; analyze the offline multi-hop analysis of its entities. An answer \
+    over 512 KiB is refused with the narrower views named.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "The scan id, as scans_list gives it.",
+                },
+                "view": {
+                    "type": "string",
+                    "enum": views,
+                    "default": ScanView::Summary.name(),
+                    "description": "What to read of the scan.",
+                },
+                "type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ARGUMENT_BYTES,
+                    "description": "With view elements: only the elements of this Spiderfoot \
+    type.",
+                },
+            },
+            "required": ["id"],
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("Read one saved scan"),
+    })
+}
+
+/// The arguments of `scan_read`: a scan id of the store's own form, a view (summary when
+/// unnamed) and, with the elements view only, an element type of letters, digits and
+/// underscores, so it reaches the scan API as the one query parameter it is.
+fn scan_read_arguments(
+    arguments: &Map<String, Value>,
+) -> Result<(String, ScanView, Option<String>), ToolError> {
+    refuse_unknown(arguments, &["id", "view", "type"])?;
+    let id = text_argument(arguments, "id", MAX_ARGUMENT_BYTES)?;
+    if !crate::scan_store::valid_id(&id) {
+        return Err("id is not a scan id: give one as scans_list gives them".into());
+    }
+    let view = match arguments.get("view") {
+        None | Some(Value::Null) => ScanView::Summary,
+        Some(Value::String(name)) => ScanView::parse(name.trim()).ok_or_else(|| {
+            let names: Vec<&str> = ScanView::ALL.iter().map(|view| view.name()).collect();
+            format!("view must be one of {}", names.join(", "))
+        })?,
+        Some(_) => return Err("view must be a string".into()),
+    };
+    let kind = match arguments.get("type") {
+        None | Some(Value::Null) => None,
+        Some(_) => {
+            let kind = text_argument(arguments, "type", MAX_ARGUMENT_BYTES)?;
+            if view != ScanView::Elements {
+                return Err("type narrows the elements view only".into());
+            }
+            if !kind
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            {
+                return Err("type is an element type name: letters, digits and underscores".into());
+            }
+            Some(kind)
+        }
+    };
+    Ok((id, view, kind))
 }
 
 /// A required string argument, trimmed, nonempty and within `max` bytes.
@@ -1091,6 +1276,25 @@ mod tests {
             Ok(json!({ "accepted": seeds, "entities": [] }))
         }
 
+        fn scans_list(&self) -> Result<Value, ToolError> {
+            self.calls.borrow_mut().push("scans_list".into());
+            Ok(json!([{ "id": "0123456789abcdef", "status": "FINISHED" }]))
+        }
+
+        fn scan_read(
+            &self,
+            id: &str,
+            view: ScanView,
+            kind: Option<&str>,
+        ) -> Result<Value, ToolError> {
+            self.calls.borrow_mut().push(format!(
+                "scan_read {id} {} {}",
+                view.name(),
+                kind.unwrap_or("-")
+            ));
+            Ok(json!({ "EMAILADDR": 2 }))
+        }
+
         fn radar_wifi(&self) -> Result<Value, ToolError> {
             self.calls.borrow_mut().push("radar_wifi".into());
             Err("termux-wifi-scaninfo is not available on this device".into())
@@ -1242,6 +1446,8 @@ mod tests {
                 "investigate",
                 "investigate_file",
                 "analyze",
+                "scans_list",
+                "scan_read",
                 "ble_decode",
                 "radar_wifi",
                 "radar_cells",
@@ -1264,7 +1470,12 @@ mod tests {
             // The device tools read this phone, not the open world, and not the same twice.
             let offline = matches!(
                 name,
-                "investigate" | "investigate_file" | "analyze" | "ble_decode"
+                "investigate"
+                    | "investigate_file"
+                    | "analyze"
+                    | "scans_list"
+                    | "scan_read"
+                    | "ble_decode"
             );
             let device = name.starts_with("radar_");
             assert_eq!(
@@ -1392,6 +1603,22 @@ mod tests {
             "analyze",
             &json!({"seeds":[" a@example.com ", "example.com"]}),
         );
+        let listed = call(&tools, "scans_list", &json!({}));
+        assert_eq!(listed["result"]["structuredContent"]["count"], 1);
+        assert_eq!(
+            listed["result"]["structuredContent"]["scans"][0]["id"],
+            "0123456789abcdef"
+        );
+        let read = call(&tools, "scan_read", &json!({"id":" 0123456789abcdef "}));
+        assert_eq!(
+            read["result"]["structuredContent"],
+            json!({"id": "0123456789abcdef", "view": "summary", "report": {"EMAILADDR": 2}})
+        );
+        call(
+            &tools,
+            "scan_read",
+            &json!({"id":"0123456789abcdef","view":"elements","type":"EMAILADDR"}),
+        );
         assert_eq!(
             *tools.calls.borrow(),
             [
@@ -1403,6 +1630,9 @@ mod tests {
                 "investigate mail a@example.com",
                 "investigate_file /sdcard/DCIM/IMG_0001.jpg",
                 "analyze a@example.com,example.com",
+                "scans_list",
+                "scan_read 0123456789abcdef summary -",
+                "scan_read 0123456789abcdef elements EMAILADDR",
             ]
         );
     }
@@ -1447,6 +1677,23 @@ mod tests {
                 json!({"seeds": vec!["x"; MAX_ANALYZE_SEEDS + 1]}),
             ),
             ("analyze", json!({"seeds":["x"], "depth": 2})),
+            ("scans_list", json!({"id":"0123456789abcdef"})),
+            ("scan_read", json!({})),
+            ("scan_read", json!({"id":"not-a-scan-id"})),
+            ("scan_read", json!({"id":"0123456789abcdef","view":"graph"})),
+            ("scan_read", json!({"id":"0123456789abcdef","view":7})),
+            (
+                "scan_read",
+                json!({"id":"0123456789abcdef","type":"EMAILADDR"}),
+            ),
+            (
+                "scan_read",
+                json!({"id":"0123456789abcdef","view":"elements","type":"EMAIL ADDR"}),
+            ),
+            (
+                "scan_read",
+                json!({"id":"0123456789abcdef","view":"elements","unique":true}),
+            ),
         ] {
             let reply = call(&tools, name, &arguments);
             assert_eq!(reply["result"]["isError"], true, "{arguments}");
@@ -1617,6 +1864,12 @@ mod tests {
                 unreachable!()
             }
             fn analyze(&self, _: &[String]) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn scans_list(&self) -> Result<Value, ToolError> {
+                unreachable!()
+            }
+            fn scan_read(&self, _: &str, _: ScanView, _: Option<&str>) -> Result<Value, ToolError> {
                 unreachable!()
             }
             fn radar_wifi(&self) -> Result<Value, ToolError> {

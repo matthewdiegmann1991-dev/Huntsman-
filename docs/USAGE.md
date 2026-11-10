@@ -632,6 +632,8 @@ On Termux (Android, aarch64, no root) the default bind `127.0.0.1:8080` needs no
 | `investigate` | `text` | the same offline selector extraction as `POST /api/investigate` and `investigate TEXT...`: no request, no key |
 | `investigate_file` | `path` | the same offline read of one local file as `investigate --file FILE`, by its path on the machine the server runs on: a text file for its selectors and embedded metadata, a photo, PDF or document for its embedded metadata; a symlink is refused, the file is never modified; no request, no key |
 | `analyze` | `seeds` (1 to 16) | the same offline multi-hop analysis as `GET /api/analyze` and `plan`: no request, no key |
+| `scans_list` | none | the scans saved on this machine, as `scans list` and `GET /api/scans` list them: no request, no key |
+| `scan_read` | `id`; `view` (`summary`, `status`, `elements`, `correlations`, `log`, `analyze`); `type` (with `elements`) | one saved scan as the scan API and `scans show|summary|elements|correlations|log|analyze` answer it; an answer over 512 KiB is refused with the narrower views named: no request, no key |
 | `ble_decode` | `bytes` (whole payloads or `TYPE:DATA` fragments, in order); `address`; `raw` | the same offline decode as `radar ble-adv` and `POST /api/ble/decode`: no request, no key |
 | `radar_wifi`, `radar_cells` | none | the same reads of this device's OS-cached Wi-Fi and cell sightings as `radar wifi --json` and `radar cells --json`, through Termux:API on an Android phone; elsewhere a tool error saying why |
 | `radar_track` | none | the same sweep as `radar track --json`, appended to the device's own private track log |
