@@ -147,33 +147,11 @@ pub const fn ad_type_name(ad_type: u8) -> &'static str {
     }
 }
 
-/// A well-known 16-bit service UUID's name, for the few an operator meets most; any other is
-/// shown by its value alone. **Pure.**
+/// The SIG's name for an assigned 16-bit UUID ([`crate::bt_uuid`]): a standard service's name,
+/// or the company a member UUID is assigned to. Any other is shown by its value alone. **Pure.**
 #[must_use]
-pub const fn service_name(uuid: u16) -> Option<&'static str> {
-    Some(match uuid {
-        0x1800 => "Generic Access",
-        0x1801 => "Generic Attribute",
-        0x1802 => "Immediate Alert",
-        0x1803 => "Link Loss",
-        0x1804 => "Tx Power",
-        0x1805 => "Current Time",
-        0x180A => "Device Information",
-        0x180D => "Heart Rate",
-        0x180F => "Battery",
-        0x1812 => "Human Interface Device",
-        0x1816 => "Cycling Speed and Cadence",
-        0x1818 => "Cycling Power",
-        0x181A => "Environmental Sensing",
-        0x1826 => "Fitness Machine",
-        0x110A => "Audio Source (BR/EDR)",
-        0x110B => "Audio Sink (BR/EDR)",
-        0x111E => "Handsfree (BR/EDR)",
-        0xFD6F => "Exposure Notification (Apple and Google)",
-        0xFE2C => "Google Fast Pair",
-        0xFEAA => "Eddystone (Google)",
-        _ => return None,
-    })
+pub fn service_name(uuid: u16) -> Option<&'static str> {
+    crate::bt_uuid::name(uuid)
 }
 
 /// The Appearance category named by a value's top ten bits (assigned numbers "Appearance
@@ -695,6 +673,22 @@ mod tests {
             "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
         );
         assert_eq!(report.local_name.as_deref(), Some("Name"));
+        // A member UUID names the company it is assigned to; an unassigned one has no name.
+        let bytes = parse_hex_tokens(&owned(&["03:5afdaafe3412"])).unwrap();
+        let report = decode(&bytes, false).unwrap();
+        let named: Vec<(&str, Option<&str>)> = report
+            .service_uuids
+            .iter()
+            .map(|u| (u.uuid.as_str(), u.service))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("fd5a", Some("Samsung Electronics Co., Ltd.")),
+                ("feaa", Some("Google LLC")),
+                ("1234", None)
+            ]
+        );
     }
 
     #[test]

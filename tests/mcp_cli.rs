@@ -102,7 +102,11 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
             "people_discover",
             "research",
             "investigate",
-            "analyze"
+            "analyze",
+            "ble_decode",
+            "radar_wifi",
+            "radar_cells",
+            "radar_track"
         ]
     );
 
@@ -154,6 +158,37 @@ fn a_client_session_initializes_lists_tools_and_reads_a_refused_lookup() {
             .is_some_and(|r| !r.is_empty()),
         "{report}"
     );
+}
+
+#[test]
+fn ble_decode_answers_offline_and_a_device_tool_says_why_it_cannot_here() {
+    let (answers, stderr, code) = session(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},
+            "clientInfo":{"name":"mcp_cli test","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        // Offline: the decoder reads the bytes a scanner showed.
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+            "name":"ble_decode","arguments":{"bytes":["01:06","ff:750093F67DCFC4FF"],
+            "address":"67:06:21:95:C1:7C"}}}),
+        // This test host is no Android phone: the device tool says why, as a tool error.
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"radar_wifi"}}),
+    ]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let decoded = &answers[1]["result"];
+    assert_eq!(decoded["isError"], false, "{decoded}");
+    let report = &decoded["structuredContent"];
+    assert_eq!(
+        report["manufacturer"][0]["company"],
+        "Samsung Electronics Co. Ltd."
+    );
+    assert_eq!(report["manufacturer"][0]["payload_bytes"], 6);
+    assert_eq!(report["address"]["kind"], "resolvable_private");
+    let wifi = &answers[2]["result"];
+    assert_eq!(wifi["isError"], true, "{wifi}");
+    let why = wifi["content"][0]["text"].as_str().unwrap();
+    assert!(!why.is_empty(), "{wifi}");
 }
 
 #[test]

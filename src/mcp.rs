@@ -95,6 +95,26 @@ pub trait Tools {
     /// # Errors
     /// Seeds the spine refuses, in words.
     fn analyze(&self, seeds: &[String]) -> Result<Value, ToolError>;
+
+    /// This device's OS-cached nearby Wi-Fi sightings, as `radar wifi` reads them through
+    /// Termux:API; no scan is triggered and no request is made.
+    ///
+    /// # Errors
+    /// Why the cache could not be read (no Termux:API, no permission), in words.
+    fn radar_wifi(&self) -> Result<Value, ToolError>;
+
+    /// This device's OS-cached cell identities, as `radar cells` reads them.
+    ///
+    /// # Errors
+    /// Why the cells could not be read, in words.
+    fn radar_cells(&self) -> Result<Value, ToolError>;
+
+    /// One tracking sweep recorded into the device's private sweep log, as `radar track` does:
+    /// recurring and following devices across the places the device has been.
+    ///
+    /// # Errors
+    /// Why the sweep could not be taken or kept, in words.
+    fn radar_track(&self) -> Result<Value, ToolError>;
 }
 
 /// One server: the tools it runs and the identity it reports.
@@ -266,6 +286,11 @@ impl<'a, T: Tools + ?Sized> Server<'a, T> {
                 .and_then(|()| text_argument(arguments, "text", MAX_TEXT_BYTES))
                 .and_then(|text| self.tools.investigate(&text)),
             "analyze" => analyze_arguments(arguments).and_then(|seeds| self.tools.analyze(&seeds)),
+            "radar_wifi" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_wifi()),
+            "radar_cells" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_cells()),
+            "radar_track" => refuse_unknown(arguments, &[]).and_then(|()| self.tools.radar_track()),
+            "ble_decode" => ble_decode_arguments(arguments)
+                .and_then(|(bytes, address, raw)| ble_decode(&bytes, address.as_deref(), raw)),
             other => return Err(format!("no tool named {other}")),
         };
         Ok(match outcome {
@@ -282,9 +307,12 @@ const INSTRUCTIONS: &str = "Huntsman OSINT Engine: live, source-attributed open-
 intelligence lookups. Every result carries its sources' typed outcomes (success, valid_zero, \
 blocked, not_configured, upstream errors) beside the entities found. A source that did not \
 answer is not evidence of absence, and a name match, an indexed page or several engines \
-returning one URL does not prove identity. Report candidates as candidates. investigate and \
-analyze are offline (no request, no key): extract selectors from a text with investigate, \
-look the interesting ones up, then analyze the set for the links between them.";
+returning one URL does not prove identity. Report candidates as candidates. investigate, \
+analyze and ble_decode are offline (no request, no key): extract selectors from a text with \
+investigate, look the interesting ones up, then analyze the set for the links between them; \
+ble_decode reads the bytes of a Bluetooth LE advertisement a scanner showed. radar_wifi, \
+radar_cells and radar_track read this device's own OS-cached radio sightings through Termux:API \
+when the server runs on an Android phone; elsewhere they say why they cannot.";
 
 /// A successful tool result: the report as structured content, and as JSON text for clients
 /// that read only text content.
@@ -342,7 +370,168 @@ pub fn tool_definitions() -> Vec<Value> {
         research_tool(),
         investigate_tool(),
         analyze_tool(),
+        ble_decode_tool(),
+        radar_wifi_tool(),
+        radar_cells_tool(),
+        radar_track_tool(),
     ]
+}
+
+/// Behaviour hints for a tool that reads this device (its OS caches, its own log): not the open
+/// world, and not the same answer twice.
+fn device_hints(title: &str, read_only: bool) -> Value {
+    json!({
+        "title": title,
+        "readOnlyHint": read_only,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+    })
+}
+
+/// The `ble_decode` tool.
+fn ble_decode_tool() -> Value {
+    json!({
+        "name": "ble_decode",
+        "title": "Offline Bluetooth LE advertisement decode",
+        "description": "Offline: no request, no key. Decode the bytes of a Bluetooth LE \
+    advertisement and scan response a scanner app showed: flags, service UUIDs (named where \
+    well known), the local name (a label the owner typed, never an identity), TX power, the \
+    appearance category, service data and manufacturer-specific data with its company named from \
+    the Bluetooth SIG list (who made the advertising firmware or the app, never who owns the \
+    device). Payloads are reported by length unless raw is set. With address, the device address \
+    is read as a Bluetooth LE address (public, static random, resolvable private or \
+    non-resolvable private) and what that means for recognising the device later.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1, "maxLength": MAX_ARGUMENT_BYTES },
+                    "minItems": 1,
+                    "maxItems": MAX_BLE_TOKENS,
+                    "description": "Hex strings in order: whole payloads (length, type, data \
+    structures) or TYPE:DATA fragments as scanner apps list them, such as ff:7500... ; a \
+    data-less fragment is its type alone, such as 02: .",
+                },
+                "address": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "The device address the scanner showed, to read its type.",
+                },
+                "raw": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Include manufacturer and service payload bytes in hex.",
+                },
+            },
+            "required": ["bytes"],
+            "additionalProperties": false,
+        },
+        "annotations": offline_hints("Offline Bluetooth LE advertisement decode"),
+    })
+}
+
+/// The `radar_wifi` tool.
+fn radar_wifi_tool() -> Value {
+    json!({
+        "name": "radar_wifi",
+        "title": "This device's cached Wi-Fi sightings",
+        "description": "Read this device's OS-cached nearby Wi-Fi results through Termux:API, \
+    as radar wifi does: each BSSID with SSID, signal, band and cache age; no scan is triggered, \
+    no position or time is inferred, and no request is made. Only on an Android phone running \
+    this server in Termux with Termux:API installed; elsewhere the tool says why it cannot read \
+    the cache. An empty cache is not evidence that there are no networks.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "annotations": device_hints("This device's cached Wi-Fi sightings", true),
+    })
+}
+
+/// The `radar_cells` tool.
+fn radar_cells_tool() -> Value {
+    json!({
+        "name": "radar_cells",
+        "title": "This device's cached cell identities",
+        "description": "Read this device's OS-cached GSM, WCDMA, LTE, 5G NR and CDMA cell \
+    identities through Termux:API, as radar cells does: the serving cell and neighbours with \
+    their identities, bands and anomaly indicators, which are never detections. No location or \
+    time is inferred and no request is made. Only on an Android phone running this server in \
+    Termux with Termux:API; elsewhere the tool says why it cannot. An empty read is inconclusive.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "annotations": device_hints("This device's cached cell identities", true),
+    })
+}
+
+/// The `radar_track` tool.
+fn radar_track_tool() -> Value {
+    json!({
+        "name": "radar_track",
+        "title": "One tracking sweep on this device",
+        "description": "Take one tracking sweep on this device, as radar track does: read the \
+    cached Wi-Fi sightings and the serving cell, add the sweep to the device's private sweep log, \
+    and report every stable BSSID heard in two or more sweeps (recurring) and every one heard in \
+    at least three distinct cells over at least ten minutes (follower), a personal-safety signal \
+    that something travelled with the device, never an identification of its owner. Appends to \
+    the log; no position is recorded and no request is made. Only on an Android phone running \
+    this server in Termux with Termux:API; elsewhere the tool says why it cannot.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "annotations": device_hints("One tracking sweep on this device", false),
+    })
+}
+
+/// The most hex strings one `ble_decode` call takes.
+pub const MAX_BLE_TOKENS: usize = 64;
+
+/// The `ble_decode` arguments: the hex strings, the address if given, and whether payload bytes
+/// are wanted.
+fn ble_decode_arguments(
+    arguments: &Map<String, Value>,
+) -> Result<(Vec<String>, Option<String>, bool), ToolError> {
+    refuse_unknown(arguments, &["bytes", "address", "raw"])?;
+    let bytes = match arguments.get("bytes") {
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err("bytes must be an array of strings".into()),
+        None => return Err("bytes is required".into()),
+    };
+    if bytes.is_empty() || bytes.len() > MAX_BLE_TOKENS {
+        return Err(format!("bytes must hold 1 to {MAX_BLE_TOKENS} strings"));
+    }
+    let mut tokens = Vec::with_capacity(bytes.len());
+    for item in bytes {
+        let Some(text) = item.as_str() else {
+            return Err("bytes must be an array of strings".into());
+        };
+        let text = text.trim();
+        if text.is_empty() || text.len() > MAX_ARGUMENT_BYTES {
+            return Err(format!(
+                "each of bytes must be 1 to {MAX_ARGUMENT_BYTES} characters"
+            ));
+        }
+        tokens.push(text.to_owned());
+    }
+    let address = match arguments.get("address") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(address)) => Some(address.trim().to_owned()),
+        Some(_) => return Err("address must be a string".into()),
+    };
+    let raw = match arguments.get("raw") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(raw)) => *raw,
+        Some(_) => return Err("raw must be a boolean".into()),
+    };
+    Ok((tokens, address, raw))
+}
+
+/// The offline decode behind the `ble_decode` tool: the same decoder as `radar ble-adv`.
+fn ble_decode(tokens: &[String], address: Option<&str>, raw: bool) -> Result<Value, ToolError> {
+    let bytes = crate::ble_adv::parse_hex_tokens(tokens)?;
+    let report = crate::ble_adv::decode(&bytes, raw)?;
+    let report = match address {
+        Some(address) => crate::ble_adv::with_address(report, address)?,
+        None => report,
+    };
+    serde_json::to_value(report).map_err(|error| format!("report could not be encoded: {error}"))
 }
 
 /// The `lookup` tool.
@@ -859,6 +1048,21 @@ mod tests {
                 .push(format!("analyze {}", seeds.join(",")));
             Ok(json!({ "accepted": seeds, "entities": [] }))
         }
+
+        fn radar_wifi(&self) -> Result<Value, ToolError> {
+            self.calls.borrow_mut().push("radar_wifi".into());
+            Err("termux-wifi-scaninfo is not available on this device".into())
+        }
+
+        fn radar_cells(&self) -> Result<Value, ToolError> {
+            self.calls.borrow_mut().push("radar_cells".into());
+            Ok(json!({ "source": "termux-telephony-cellinfo", "cells": [] }))
+        }
+
+        fn radar_track(&self) -> Result<Value, ToolError> {
+            self.calls.borrow_mut().push("radar_track".into());
+            Ok(json!({ "sweeps": 1, "recurring": [], "followers": [] }))
+        }
     }
 
     fn answer(tools: &Recorder, line: &str) -> Option<Value> {
@@ -994,18 +1198,34 @@ mod tests {
                 "people_discover",
                 "research",
                 "investigate",
-                "analyze"
+                "analyze",
+                "ble_decode",
+                "radar_wifi",
+                "radar_cells",
+                "radar_track",
             ]
         );
         for tool in listed {
+            let name = tool["name"].as_str().unwrap();
             assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
             assert_eq!(tool["inputSchema"]["additionalProperties"], false, "{tool}");
-            assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
+            // Only a tracking sweep writes anything (to the device's own log).
+            assert_eq!(
+                tool["annotations"]["readOnlyHint"],
+                name != "radar_track",
+                "{tool}"
+            );
             assert_eq!(tool["annotations"]["destructiveHint"], false, "{tool}");
             assert!(tool["description"].as_str().unwrap().len() > 40, "{tool}");
             // The offline tools say so: a model may call them freely and expect the same answer.
-            let offline = matches!(tool["name"].as_str(), Some("investigate" | "analyze"));
-            assert_eq!(tool["annotations"]["openWorldHint"], !offline, "{tool}");
+            // The device tools read this phone, not the open world, and not the same twice.
+            let offline = matches!(name, "investigate" | "analyze" | "ble_decode");
+            let device = name.starts_with("radar_");
+            assert_eq!(
+                tool["annotations"]["openWorldHint"],
+                !(offline || device),
+                "{tool}"
+            );
             assert_eq!(tool["annotations"]["idempotentHint"], offline, "{tool}");
             assert_eq!(
                 tool["description"]
@@ -1025,6 +1245,67 @@ mod tests {
         for kind in ScanKind::ALL {
             assert!(kinds.as_array().unwrap().contains(&json!(kind.command())));
         }
+    }
+
+    #[test]
+    fn ble_decode_reads_a_scanner_record_offline_and_radar_tools_reach_the_device() {
+        let tools = Recorder::default();
+        let reply = call(
+            &tools,
+            "ble_decode",
+            &json!({"bytes": ["01:06", "02:", "ff:7500021861B10F3C908FD6B6C2309A2F4F5604AE24545B5A363A"],
+                     "address": "67:06:21:95:C1:7C"}),
+        );
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        let report = &reply["result"]["structuredContent"];
+        assert_eq!(report["source"], "ble-adv");
+        assert_eq!(
+            report["manufacturer"][0]["company"],
+            "Samsung Electronics Co. Ltd."
+        );
+        assert_eq!(report["manufacturer"][0]["payload_bytes"], 24);
+        assert!(report["manufacturer"][0].get("payload_hex").is_none());
+        assert_eq!(report["address"]["kind"], "resolvable_private");
+        assert!(tools.calls.borrow().is_empty(), "decoding needs no adapter");
+
+        let raw = call(
+            &tools,
+            "ble_decode",
+            &json!({"bytes": ["ff:750093f6"], "raw": true}),
+        );
+        assert_eq!(
+            raw["result"]["structuredContent"]["manufacturer"][0]["payload_hex"],
+            "93f6"
+        );
+        for bad in [
+            json!({}),
+            json!({"bytes": []}),
+            json!({"bytes": ["zz"]}),
+            json!({"bytes": ["0509414243"]}),
+            json!({"bytes": ["020106"], "address": "not an address"}),
+            json!({"bytes": ["020106"], "raw": "yes"}),
+            json!({"bytes": ["020106"], "extra": 1}),
+        ] {
+            let reply = call(&tools, "ble_decode", &bad);
+            assert_eq!(reply["result"]["isError"], true, "{bad}: {reply}");
+        }
+
+        let wifi = call(&tools, "radar_wifi", &json!({}));
+        assert_eq!(wifi["result"]["isError"], true);
+        assert_eq!(
+            wifi["result"]["content"][0]["text"],
+            "termux-wifi-scaninfo is not available on this device"
+        );
+        let cells = call(&tools, "radar_cells", &json!({}));
+        assert_eq!(cells["result"]["structuredContent"]["cells"], json!([]));
+        let track = call(&tools, "radar_track", &json!({}));
+        assert_eq!(track["result"]["structuredContent"]["sweeps"], 1);
+        let refused = call(&tools, "radar_cells", &json!({"scan": true}));
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(
+            tools.calls.borrow().as_slice(),
+            ["radar_wifi", "radar_cells", "radar_track"]
+        );
     }
 
     #[test]
@@ -1274,6 +1555,15 @@ mod tests {
             }
             fn analyze(&self, _: &[String]) -> Result<Value, ToolError> {
                 unreachable!()
+            }
+            fn radar_wifi(&self) -> Result<Value, ToolError> {
+                Err("no device".into())
+            }
+            fn radar_cells(&self) -> Result<Value, ToolError> {
+                Err("no device".into())
+            }
+            fn radar_track(&self) -> Result<Value, ToolError> {
+                Err("no device".into())
             }
         }
         let run = |arguments: Value| {

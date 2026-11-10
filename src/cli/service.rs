@@ -286,7 +286,7 @@ pub(super) fn web_research(query: &str) -> Result<serde_json::Value, LookupError
 }
 
 /// Mobile radar reads exactly the same Termux Wi-Fi cache as the CLI.
-fn web_radar() -> Result<huntsman_recon::wifi_radar::WifiScan, LookupError> {
+pub(super) fn web_radar() -> Result<huntsman_recon::wifi_radar::WifiScan, LookupError> {
     super::radar::capture_wifi().map_err(|message| LookupError {
         status: 503,
         message,
@@ -294,7 +294,7 @@ fn web_radar() -> Result<huntsman_recon::wifi_radar::WifiScan, LookupError> {
 }
 
 /// Mobile radar reads exactly the same Termux cell report as `radar cells`.
-fn web_cells() -> Result<huntsman_recon::cell_radar::CellScan, LookupError> {
+pub(super) fn web_cells() -> Result<huntsman_recon::cell_radar::CellScan, LookupError> {
     super::radar::capture_cells().map_err(|message| LookupError {
         status: 503,
         message,
@@ -302,7 +302,7 @@ fn web_cells() -> Result<huntsman_recon::cell_radar::CellScan, LookupError> {
 }
 
 /// Mobile radar records one sweep into the same track log `radar track` keeps.
-fn web_track() -> Result<huntsman_recon::radar::TrackReport, LookupError> {
+pub(super) fn web_track() -> Result<huntsman_recon::radar::TrackReport, LookupError> {
     let log = super::scans::default_radar_log().ok_or_else(|| LookupError {
         status: 500,
         message: "radar track: no log; set HUNTSMAN_HOME or HOME".into(),

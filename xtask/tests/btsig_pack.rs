@@ -64,6 +64,58 @@ fn the_committed_blob_is_the_pack_of_its_own_dump() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The SIG UUID listing a dump describes, with the `uuid` key and the textual `id:` the SIG
+/// adds, which the blob does not keep.
+fn uuid_yaml_of(listing: &str) -> String {
+    let mut yaml = String::from("uuids:\n");
+    for line in listing.lines() {
+        let (id, name) = line.split_once('\t').expect("ID<TAB>NAME");
+        yaml.push_str(&format!(
+            " - uuid: 0x{id}\n   name: '{}'\n   id: org.example.{id}\n",
+            name.replace('\'', "''")
+        ));
+    }
+    yaml
+}
+
+#[test]
+fn the_committed_uuid_blob_is_the_pack_of_its_own_dump() {
+    const UUIDS: &str = "../src/bt_uuid.bin";
+    let dump = xtask(&["btsig", "dump", UUIDS]);
+    assert!(dump.status.success(), "{dump:?}");
+    let listing = String::from_utf8(dump.stdout).expect("UTF-8 listing");
+    assert!(listing.contains("180F\tBattery\n"), "{listing}");
+    assert!(listing.contains("FD5A\tSamsung Electronics Co., Ltd.\n"));
+    let dir = scratch("uuid-round-trip");
+    // Split the listing in two files, as the SIG publishes services and members apart.
+    let lines: Vec<&str> = listing.lines().collect();
+    let (first, second) = lines.split_at(lines.len() / 2);
+    let a = dir.join("service_uuids.yaml");
+    let b = dir.join("member_uuids.yaml");
+    fs::write(&a, uuid_yaml_of(&first.join("\n"))).unwrap();
+    fs::write(&b, uuid_yaml_of(&second.join("\n"))).unwrap();
+    let out = dir.join("bt_uuid.bin");
+    let pack = xtask(&[
+        "btsig",
+        "pack-uuids",
+        out.to_str().unwrap(),
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert!(pack.status.success(), "{pack:?}");
+    assert_eq!(fs::read(&out).unwrap(), fs::read(UUIDS).unwrap());
+    // A UUID listed in both files is refused.
+    let twice = xtask(&[
+        "btsig",
+        "pack-uuids",
+        out.to_str().unwrap(),
+        a.to_str().unwrap(),
+        a.to_str().unwrap(),
+    ]);
+    assert_eq!(twice.status.code(), Some(64), "{twice:?}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn usage_and_a_malformed_listing_are_refused() {
     assert_eq!(xtask(&["btsig"]).status.code(), Some(64));
