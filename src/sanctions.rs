@@ -15,6 +15,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::entity::{Entity, EntityKind, Evidence, EvidenceProvenance, merge_by_uid, push_entity};
@@ -164,9 +165,11 @@ struct Listing {
     fields: Vec<(&'static str, String)>,
 }
 
-/// Whether `listed` carries every word of `query`. **Pure.**
+/// Whether `listed` carries every word of `query`, matching across scripts: `query` is the
+/// subject's transliteration-aware match keys ([`crate::textnorm::name_match_keys`]), and `listed`
+/// is reduced the same way, so a Cyrillic listing and a Latin query (or the reverse) meet. **Pure.**
 fn names_query(listed: &str, query: &[String]) -> bool {
-    crate::textnorm::carries_name(listed, query)
+    crate::textnorm::carries_every_key(listed, query)
 }
 
 /// A list as read for one name: the listings that may carry it (built from their rows), how
@@ -176,8 +179,33 @@ struct ListRead {
     listings: Vec<Listing>,
     /// The listings the copy holds, matching or not.
     read: usize,
+    /// The data rows the copy holds that could not be read: a row short of its columns, a
+    /// numbered row without a name, a subject left with no name. An unreadable row may hold
+    /// the subject, so a list with any cannot clear a name.
+    unreadable: usize,
     note: Option<String>,
     current: bool,
+}
+
+/// What a list's parser read: the listings built, the listings the copy holds in all, and the
+/// rows it could not read.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Parsed {
+    listings: Vec<Listing>,
+    read: usize,
+    unreadable: usize,
+}
+
+impl Parsed {
+    fn into_read(self, note: Option<String>, current: bool) -> ListRead {
+        ListRead {
+            listings: self.listings,
+            read: self.read,
+            unreadable: self.unreadable,
+            note,
+            current,
+        }
+    }
 }
 
 /// Field `at` of a delimited `line`, trimmed: read in place while no quote precedes the field's
@@ -225,7 +253,7 @@ pub fn check(
     if !transport.runs_module(SOURCE) {
         return (Vec::new(), Vec::new());
     }
-    let query = crate::textnorm::name_tokens(name);
+    let query = crate::textnorm::name_match_keys(name);
     if query.len() < 2 {
         return (Vec::new(), Vec::new());
     }
@@ -242,10 +270,12 @@ pub fn check(
             Ok(ListRead {
                 listings,
                 read,
+                unreadable,
                 note,
                 current,
             }) => {
-                let found = record_matches(&listings, &query, label, scan_id, &mut entities);
+                let (found, matching) =
+                    record_matches(&listings, &query, label, scan_id, &mut entities);
                 let mut outcome = if !current {
                     // Retain every historical matching document, but neither a positive
                     // nor a negative from an outdated copy proves the present-day list.
@@ -257,12 +287,32 @@ pub fn check(
                         Some(found),
                         "list refresh failed or verified cache freshness expired",
                     )
+                } else if found == 0 && unreadable > 0 {
+                    // Rows that could not be read could hold the subject: no clean negative.
+                    SourceExecutionOutcome::observed(
+                        label,
+                        now_unix,
+                        SourceOutcomeKind::Inconclusive,
+                        None,
+                        Some(0),
+                        "no readable listing matched, but some rows could not be read",
+                    )
                 } else if found == 0 {
                     SourceExecutionOutcome::valid_zero(label, now_unix)
                 } else {
                     SourceExecutionOutcome::success(label, now_unix, found)
                 };
                 let mut detail = format!("{read} listings read");
+                if unreadable > 0 {
+                    let _ = write!(detail, "; {unreadable} rows could not be read");
+                }
+                if matching > found {
+                    let _ = write!(
+                        detail,
+                        "; {} more matching listings beyond the first {found} were not attached",
+                        matching - found
+                    );
+                }
                 if let Some(note) = note {
                     detail.push_str("; ");
                     detail.push_str(&note);
@@ -277,15 +327,17 @@ pub fn check(
     (entities, outcomes)
 }
 
-/// Push every listing in `listings` that names `query`, at most [`MAX_MATCHES`]. **Pure.**
+/// Push every listing in `listings` that names `query`, at most [`MAX_MATCHES`]: how many were
+/// attached, and how many matched in all, so a cut-off is never silent. **Pure.**
 fn record_matches(
     listings: &[Listing],
     query: &[String],
     label: &str,
     scan_id: &str,
     entities: &mut Vec<Entity>,
-) -> usize {
+) -> (usize, usize) {
     let mut found = 0;
+    let mut matching = 0;
     for listing in listings {
         let Some(matched) = listing
             .names
@@ -294,8 +346,9 @@ fn record_matches(
         else {
             continue;
         };
+        matching += 1;
         if found == MAX_MATCHES {
-            break;
+            continue;
         }
         found += 1;
         let primary = listing.names.first().map_or("", String::as_str);
@@ -324,7 +377,7 @@ fn record_matches(
             &["sanctions", "name-match-lead"],
         );
     }
-    found
+    (found, matching)
 }
 
 const fn list_title(label: &str) -> &'static str {
@@ -489,6 +542,7 @@ fn read_dfat(
     Ok(ListRead {
         read: listings.len(),
         listings,
+        unreadable: 0,
         note,
         current,
     })
@@ -594,8 +648,8 @@ fn read_ofac(
             false,
         ),
     };
-    let (listings, read) = parse_ofac(&sdn, &alt, query);
-    if read == 0 {
+    let parsed = parse_ofac(&sdn, &alt, query);
+    if parsed.read == 0 {
         return Err((
             SourceOutcomeKind::ProtocolDrift,
             format!("no SDN row could be read in {} bytes", sdn.len()),
@@ -606,12 +660,7 @@ fn read_ofac(
         .flatten()
         .collect::<Vec<_>>()
         .join("; ");
-    Ok(ListRead {
-        listings,
-        read,
-        note: Some(note),
-        current: sdn_current && alt_current,
-    })
+    Ok(parsed.into_read(Some(note), sdn_current && alt_current))
 }
 
 /// The UN list's individuals and entities that may carry `query`.
@@ -622,19 +671,14 @@ fn read_un(
     now_unix: u64,
 ) -> Result<ListRead, crate::threat_feeds::Failure> {
     let (xml, note, current) = copy_of(transport, dir, &UN_SC, now_unix)?;
-    let (listings, read) = parse_un(&xml, query);
-    if read == 0 {
+    let parsed = parse_un(&xml, query);
+    if parsed.read == 0 {
         return Err((
             SourceOutcomeKind::ProtocolDrift,
             format!("no listing could be read in {} bytes", xml.len()),
         ));
     }
-    Ok(ListRead {
-        listings,
-        read,
-        note,
-        current,
-    })
+    Ok(parsed.into_read(note, current))
 }
 
 /// The EU list's subjects that may carry `query`.
@@ -645,19 +689,14 @@ fn read_eu(
     now_unix: u64,
 ) -> Result<ListRead, crate::threat_feeds::Failure> {
     let (csv, note, current) = copy_of(transport, dir, &EU_FSF, now_unix)?;
-    let (listings, read) = parse_eu(&csv, query);
-    if read == 0 {
+    let parsed = parse_eu(&csv, query);
+    if parsed.read == 0 {
         return Err((
             SourceOutcomeKind::ProtocolDrift,
             format!("no subject could be read in {} bytes", csv.len()),
         ));
     }
-    Ok(ListRead {
-        listings,
-        read,
-        note,
-        current,
-    })
+    Ok(parsed.into_read(note, current))
 }
 
 /// The EU list's columns kept for the evidence, by header name, and the attribute each becomes.
@@ -680,36 +719,52 @@ const EU_FIELDS: [(&str, &str); 16] = [
     ("Identification_Remark", "identification"),
 ];
 
+/// The EU list's subjects, read without splitting a row: every subject's id, the ids of the
+/// subjects with a row that may carry `query`, and the rows that cannot be read (a row without a
+/// subject, or with fewer cells than the header: a cell holding the separator only adds to the
+/// count). **Pure.**
+fn eu_subjects<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    id_at: usize,
+    columns: usize,
+    query: &[String],
+) -> (HashSet<Cow<'a, str>>, HashSet<Cow<'a, str>>, usize) {
+    let mut read = HashSet::new();
+    let mut candidates = HashSet::new();
+    let mut unreadable = 0;
+    for line in lines {
+        let line = line.trim_end_matches('\r');
+        let id = field_of(line, ';', id_at);
+        if id.is_empty() || line.matches(';').count() + 1 < columns {
+            unreadable += 1;
+            continue;
+        }
+        if crate::textnorm::carries_every_key(line, query) {
+            candidates.insert(id.clone());
+        }
+        read.insert(id);
+    }
+    (read, candidates, unreadable)
+}
+
 /// Every subject on the EU list that may carry `query` (every subject, for a `query` of no
 /// words), and how many subjects the list holds. The file holds one row per combination of a
 /// subject's names, addresses, birth dates, documents and citizenships, so rows are grouped by
 /// `Entity_LogicalId` and each value is kept once, in file order. A subject is built only when
-/// one of its rows can carry every word of `query` ([`crate::textnorm::carries_name`]), so the
+/// one of its rows can carry every word of `query` ([`crate::textnorm::carries_every_key`]), so the
 /// rows of every other subject are counted and never split. **Pure.**
-fn parse_eu(csv: &str, query: &[String]) -> (Vec<Listing>, usize) {
+fn parse_eu(csv: &str, query: &[String]) -> Parsed {
     let mut lines = csv.trim_start_matches('\u{feff}').lines();
     let Some(header) = lines.next() else {
-        return (Vec::new(), 0);
+        return Parsed::default();
     };
     let header = delimited_fields(header, ';');
     let column = |name: &str| header.iter().position(|h| h == name);
     let (Some(id_at), Some(whole_at)) = (column("Entity_LogicalId"), column("NameAlias_WholeName"))
     else {
-        return (Vec::new(), 0);
+        return Parsed::default();
     };
-    let mut read: HashSet<Cow<'_, str>> = HashSet::new();
-    let mut candidates: HashSet<Cow<'_, str>> = HashSet::new();
-    for line in lines.clone() {
-        let line = line.trim_end_matches('\r');
-        let id = field_of(line, ';', id_at);
-        if id.is_empty() {
-            continue;
-        }
-        if crate::textnorm::carries_name(line, query) {
-            candidates.insert(id.clone());
-        }
-        read.insert(id);
-    }
+    let (read, candidates, mut unreadable) = eu_subjects(lines.clone(), id_at, header.len(), query);
     let parts_at = [
         column("NameAlias_FirstName"),
         column("NameAlias_MiddleName"),
@@ -728,6 +783,7 @@ fn parse_eu(csv: &str, query: &[String]) -> (Vec<Listing>, usize) {
         }
         let fields = delimited_fields(line, ';');
         if fields.len() != header.len() {
+            unreadable += 1;
             continue;
         }
         let id = fields[id_at].trim();
@@ -766,7 +822,13 @@ fn parse_eu(csv: &str, query: &[String]) -> (Vec<Listing>, usize) {
     let listings = order
         .into_iter()
         .filter_map(|id| subjects.remove(&id))
-        .filter(|listing| !listing.names.is_empty())
+        .filter(|listing| {
+            let named = !listing.names.is_empty();
+            if !named {
+                unreadable += 1;
+            }
+            named
+        })
         .map(|mut listing| {
             let reference = listing
                 .fields
@@ -785,7 +847,11 @@ fn parse_eu(csv: &str, query: &[String]) -> (Vec<Listing>, usize) {
             listing
         })
         .collect();
-    (listings, read.len())
+    Parsed {
+        listings,
+        read: read.len(),
+        unreadable,
+    }
 }
 
 /// OFAC's "no value" marker.
@@ -800,23 +866,29 @@ fn ofac_value(field: &str) -> Option<String> {
 /// and how many numbered rows the file holds. A row that cannot carry the name, and the alias
 /// rows of a number no row of which can, are counted and never split. A line that is not a
 /// full row (the file's trailing end-of-file byte) is skipped. **Pure.**
-fn parse_ofac(sdn: &str, alt: &str, query: &[String]) -> (Vec<Listing>, usize) {
+fn parse_ofac(sdn: &str, alt: &str, query: &[String]) -> Parsed {
     let mut candidates: HashSet<Cow<'_, str>> = HashSet::new();
     for line in alt.lines() {
         let line = line.trim_end_matches('\r');
-        if crate::textnorm::carries_name(line, query) {
+        if crate::textnorm::carries_every_key(line, query) {
             candidates.insert(field_of(line, ',', 0));
         }
     }
     let mut read = 0;
+    let mut unreadable = 0;
     for line in sdn.lines() {
         let line = line.trim_end_matches('\r');
         let number = field_of(line, ',', 0);
         if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
             continue;
         }
+        // A numbered row with fewer separators than a full row has cells cannot be read.
+        if line.matches(',').count() < COLUMNS.len() - 1 {
+            unreadable += 1;
+            continue;
+        }
         read += 1;
-        if crate::textnorm::carries_name(line, query) {
+        if crate::textnorm::carries_every_key(line, query) {
             candidates.insert(number);
         }
     }
@@ -856,9 +928,11 @@ fn parse_ofac(sdn: &str, alt: &str, query: &[String]) -> (Vec<Listing>, usize) {
         }
         let fields = csv_fields(line);
         if fields.len() < COLUMNS.len() {
+            unreadable += 1;
             continue;
         }
         let (Some(number), Some(name)) = (ofac_value(&fields[0]), ofac_value(&fields[1])) else {
+            unreadable += 1;
             continue;
         };
         if !number.bytes().all(|b| b.is_ascii_digit()) {
@@ -877,31 +951,38 @@ fn parse_ofac(sdn: &str, alt: &str, query: &[String]) -> (Vec<Listing>, usize) {
             fields: kept,
         });
     }
-    (listings, read)
+    Parsed {
+        listings,
+        read,
+        unreadable,
+    }
 }
 
 /// Every individual and entity on the UN list whose block may carry `query` (every one, for a
 /// `query` of no words): the name parts joined, every alias, and every field kept for the
 /// evidence; and how many blocks the list holds. A block that cannot carry the name is counted
 /// and never read. **Pure.**
-fn parse_un(xml: &str, query: &[String]) -> (Vec<Listing>, usize) {
+fn parse_un(xml: &str, query: &[String]) -> Parsed {
     let mut listings = Vec::new();
     let mut read = 0;
+    let mut unreadable = 0;
     for (element, kind) in [("INDIVIDUAL", "individual"), ("ENTITY", "entity")] {
         for block in xml_blocks(xml, element) {
             read += 1;
-            if !block_carries(block, query) {
-                continue;
-            }
             let parts: Vec<String> = ["FIRST_NAME", "SECOND_NAME", "THIRD_NAME", "FOURTH_NAME"]
                 .iter()
                 .filter_map(|tag| xml_tag_values(block, tag).into_iter().next())
                 .collect();
             let Some(reference) = xml_tag_values(block, "REFERENCE_NUMBER").into_iter().next()
             else {
+                unreadable += 1;
                 continue;
             };
             if parts.is_empty() {
+                unreadable += 1;
+                continue;
+            }
+            if !block_carries(block, query) {
                 continue;
             }
             let mut names = vec![parts.join(" ")];
@@ -954,16 +1035,20 @@ fn parse_un(xml: &str, query: &[String]) -> (Vec<Listing>, usize) {
             });
         }
     }
-    (listings, read)
+    Parsed {
+        listings,
+        read,
+        unreadable,
+    }
 }
 
 /// Whether a block of the UN list may carry every word of `query`: asked of its text in place,
 /// unescaped first when a character reference in it could spell a letter. **Pure.**
 fn block_carries(block: &str, query: &[String]) -> bool {
     if block.contains("&#") {
-        crate::textnorm::carries_name(&xml_unescape(block), query)
+        crate::textnorm::carries_every_key(&xml_unescape(block), query)
     } else {
-        crate::textnorm::carries_name(block, query)
+        crate::textnorm::carries_every_key(block, query)
     }
 }
 

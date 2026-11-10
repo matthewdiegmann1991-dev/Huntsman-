@@ -16,7 +16,20 @@ fi
 
 export HUNTSMAN_DATA_DIR="$DATA_DIR"
 export HOME="$DATA_DIR"
-export HSE_BIND="${HSE_BIND:-0.0.0.0:$PORT_VALUE}"
+# The bind: an explicit HSE_BIND as given; otherwise every interface on PORT over both address
+# families where the kernel offers IPv6 (a platform's private network can be IPv6-only, and its
+# proxy may reach the service over either family), else over IPv4 alone. Tests point the state
+# file elsewhere. The choice is logged.
+IPV6_STATE_FILE="${HUNTSMAN_IPV6_STATE_FILE:-/proc/sys/net/ipv6/conf/all/disable_ipv6}"
+if [ -z "${HSE_BIND:-}" ]; then
+  if [ -r "$IPV6_STATE_FILE" ] && [ "$(tr -d '[:space:]' < "$IPV6_STATE_FILE")" = "0" ]; then
+    HSE_BIND="[::]:$PORT_VALUE"
+  else
+    HSE_BIND="0.0.0.0:$PORT_VALUE"
+  fi
+fi
+export HSE_BIND
+echo "huntsman-entrypoint: serving on $HSE_BIND" >&2
 
 if [ "$(id -u)" = "0" ]; then
   mkdir -p "$DATA_DIR/.huntsman" "$DATA_DIR/var"

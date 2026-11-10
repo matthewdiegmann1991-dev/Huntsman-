@@ -51,6 +51,90 @@ fn a_generated_token_is_stored_and_never_printed() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// Without an explicit `HSE_BIND`, the entrypoint binds every interface over both address
+/// families where the kernel offers IPv6 (a platform's private network can be IPv6-only), else
+/// over IPv4 alone; an explicit bind is handed on as given. The choice is logged.
+#[test]
+fn the_bind_follows_the_kernel_s_address_families_unless_given() {
+    let root =
+        std::env::temp_dir().join(format!("huntsman-entrypoint-bind-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let data = root.join("data");
+    fs::create_dir_all(&data).unwrap();
+    // The stub records the bind the entrypoint handed it.
+    let stub = root.join("huntsman-recon");
+    executable::write_executable(
+        &stub,
+        "#!/bin/sh\nprintf '%s' \"$HSE_BIND\" > \"$HUNTSMAN_BIND_SEEN\"\nexit 0\n",
+        0o755,
+    );
+    let seen = root.join("bind");
+    let state = root.join("disable_ipv6");
+    // Run as root, the entrypoint drops privileges through gosu; a stand-in runs the command as
+    // is, so the test sees the bind wherever it runs.
+    let tools = root.join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    executable::write_executable(
+        &tools.join("gosu"),
+        "#!/bin/sh\nshift\nexec \"$@\"\n",
+        0o755,
+    );
+    let path = format!(
+        "{}:{}",
+        tools.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |explicit: Option<&str>, ipv6_disabled: Option<&str>| {
+        let _ = fs::remove_file(&seen);
+        match ipv6_disabled {
+            Some(value) => fs::write(&state, format!("{value}\n")).unwrap(),
+            None => {
+                let _ = fs::remove_file(&state);
+            }
+        }
+        let mut command = Command::new("sh");
+        command
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/container-entrypoint.sh"))
+            .env("HSE_AUTH_TOKEN", "a-token-for-the-test")
+            .env("HUNTSMAN_DATA_DIR", &data)
+            .env("HUNTSMAN_BIN", &stub)
+            .env("HUNTSMAN_BIND_SEEN", &seen)
+            .env("HUNTSMAN_IPV6_STATE_FILE", &state)
+            .env("HUNTSMAN_STARTUP_CHECK", "0")
+            .env("PATH", &path)
+            .env("PORT", "8080")
+            .env_remove("HSE_BIND");
+        if let Some(bind) = explicit {
+            command.env("HSE_BIND", bind);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let bind = fs::read_to_string(&seen).unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&format!("serving on {bind}")),
+            "the bind is logged: {output:?}"
+        );
+        bind
+    };
+    assert_eq!(
+        run(None, Some("0")),
+        "[::]:8080",
+        "IPv6 offered: both families"
+    );
+    assert_eq!(
+        run(None, Some("1")),
+        "0.0.0.0:8080",
+        "IPv6 disabled: IPv4 alone"
+    );
+    assert_eq!(run(None, None), "0.0.0.0:8080", "no IPv6 stack: IPv4 alone");
+    assert_eq!(
+        run(Some("127.0.0.1:9000"), Some("0")),
+        "127.0.0.1:9000",
+        "an explicit bind is handed on as given"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// Poll `ready` every 20 ms for up to ten seconds.
 fn wait_for(mut ready: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);

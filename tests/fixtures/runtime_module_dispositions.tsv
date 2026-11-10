@@ -64,6 +64,8 @@ credential_origin	leaf	authentication authority boundary
 cross_scan	runtime	bounded historical scan bridge analysis
 crtsh	adapter	Certificate Transparency source client
 crypto_cli	adapter	crypto lookup front-end reached from crypto, scan -k crypto and /api/lookup
+cve_cli	adapter	cve front-end reached from the cve command, merging osv and epss into one CVE document
+cvss	leaf	offline CVSS v3.0/v3.1 base-score and severity computation from a vector string
 deadline	leaf	shared per-lookup request budget
 dehashed	adapter	DeHashed exact-match source client and lineage-safe collector
 dependency	runtime	module dependency and dispatch graph
@@ -92,6 +94,7 @@ engineering_command	diagnostic	executable engineering command hierarchy and capa
 entity	runtime	canonical entity and evidence model
 entity_reality	leaf	read-only bounded source-attributed saved-entity claim assessment reached through scan_api and scans reality
 environment	leaf	the process environment, read through one module
+epss	adapter	keyless FIRST EPSS per-CVE exploitation-probability client reached through cve_cli from the cve command
 error	leaf	shared error type
 eth_rpc	adapter	keyless Ethereum mainnet account observations through crypto_cli, scan and shared Web UI lookup over the shared evm_rpc core; provenance retained without ownership attribution
 evidence	runtime	Stage 2 directory shim re-exporting L1 evidence-contract leaves
@@ -144,6 +147,7 @@ isc	adapter	Internet Storm Center leg reached through indicator_legs from ip, sc
 itunes	adapter	Apple iTunes Search source client reached through itunes_cli from the itunes command
 itunes_cli	adapter	itunes keyword front-end reached from the itunes command
 json	exporter	canonical JSON support
+kev	adapter	keyless CISA KEV known-exploited catalogue, one download kept in the feed directory, matched locally, reached through cve_cli from the cve command
 key_import	adapter	Spiderfoot SpiderFoot.cfg and keys-file key import reached through serve's POST /api/settings/keys (Settings, Import API keys)
 keybase	adapter	public Keybase identity source client reached through username_cli from the username command and scan
 keys	leaf	credential file handling
@@ -179,6 +183,7 @@ nominatim	adapter	OpenStreetMap Nominatim geocoding source client reached throug
 nominatim_cli	adapter	geocode forward/reverse front-end reached from the geocode command
 npm_author	adapter	keyless npm registry author lookup reached through username_cli from the username command and username scans, keeping the subject handle, only its own published contacts, and co-maintainer leads
 numverify	adapter	Numverify leg reached through phone_cli from phone, scan -k phone and /api/lookup when its key is set
+nvd	adapter	keyless NVD per-CVE record client reached through cve_cli from the cve command
 oathnet	adapter	OathNet breach-search leg reached through exposure_cli from exposure, scan -k exposure and /api/lookup
 opencellid	adapter	OpenCelliD cell position leg reached through indicator_legs from network cell:MCC:MNC:AREA:CELL, and its cells-in-area search from network LAT,LON, scan and /api/lookup when its key is set
 openlibrary_author	adapter	keyless Open Library author-catalogue leg reached through people_discovery from people-discover and POST /api/people/discover; each catalogue entry is a separate unverified lead
@@ -190,6 +195,7 @@ osint_blueprint	exporter	OSINT app blueprint registry reached through the bluepr
 osint_casework	leaf	source-linked casework model reached through osint case; receipts, chronology and conflicts without identity attribution
 osint_matrix	runtime	canonical compiled source-file ownership matrix reached through osint matrix CLI and protected GET /api/osint/matrix; read-only and not evidence of live provider availability
 osint_synergy	runtime	source-join links between entities through shared DNS, IP and ASN attributes, each labelled not proven, reached through the analysis report, the offline analysis and /api/lookup
+osv	adapter	keyless OSV per-CVE vulnerability record client reached through cve_cli from the cve command
 otx	adapter	AlienVault OTX leg reached through indicator_legs from ip, domain, scan and /api/lookup
 oui	leaf	OUI lookup
 oui_ieee	leaf	IEEE OUI data
@@ -287,9 +293,12 @@ stopforumspam	adapter	StopForumSpam leg reached through indicator_legs from emai
 store	exporter	bounded atomic session persistence
 submd	adapter	sub.md passive subdomain leg reached through indicator_legs from domain, scan and /api/lookup
 tags	leaf	entity tag constants
+telegram	adapter	keyless public Telegram page client (t.me/HANDLE), reached from username_cli by the username command and username scans, bounded by the same guarded transport
+telegram_network	adapter	bounded keyless map of public Telegram channels reached by the telegram-network command over telegram::observe and the same guarded transport
 temporal_consistency	runtime	one source's impossible date orders through intelligence report
 termination	runtime	explicit bounded termination semantics
 textnorm	leaf	text normalization
+translit	leaf	offline Cyrillic-to-Latin romanisation and ASCII folding for cross-script name matching
 threat_feeds	adapter	downloaded threat feeds (abuse.ch, AlienVault, blocklist.de, botvrij, CINS, CleanTalk, CyberCrime-Tracker, Emerging Threats, GreenSnow, OpenPhish, PhishTank, Steven Black, Tor exits, VoIPBL, VXVault) kept in the state directory and reached through ip_cli, domain_cli and netblock_cli from ip, domain, netblock, scan and /api/lookup
 threatfox	adapter	ThreatFox IOC leg reached through indicator_legs from ip, domain, scan and /api/lookup when its key is set
 tiktok_public_contact	adapter	keyless public TikTok bio contact client, reached from username_cli and bounded by same guarded transport

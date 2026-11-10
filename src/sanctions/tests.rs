@@ -297,50 +297,63 @@ fn the_eu_list_groups_a_subject_s_rows_and_matches_only_whole_words() {
 /// character reference included.
 #[test]
 fn a_list_builds_only_the_listings_that_may_carry_the_name_and_counts_them_all() {
-    fn same_as_whole(
-        every: &[Listing],
-        held: usize,
-        parse: impl Fn(&[String]) -> (Vec<Listing>, usize),
-    ) {
+    fn same_as_whole(every: &[Listing], held: usize, parse: impl Fn(&[String]) -> Parsed) {
         for listing in every {
             for name in &listing.names {
-                let query = crate::textnorm::name_tokens(name);
-                let (built, read) = parse(&query);
-                assert_eq!(read, held, "{name}: every listing is counted");
-                assert!(built.contains(listing), "{name}: {built:?}");
+                let query = crate::textnorm::name_match_keys(name);
+                let parsed = parse(&query);
+                assert_eq!(parsed.read, held, "{name}: every listing is counted");
+                assert_eq!(parsed.unreadable, 0, "{name}: every row is readable");
+                assert!(parsed.listings.contains(listing), "{name}: {parsed:?}");
                 assert!(
-                    built.iter().all(|candidate| every.contains(candidate)),
+                    parsed
+                        .listings
+                        .iter()
+                        .all(|candidate| every.contains(candidate)),
                     "{name}: a candidate is a whole listing"
                 );
             }
         }
         let nobody = ["nobody".to_owned(), "here".to_owned()];
-        assert_eq!(parse(&nobody), (Vec::new(), held));
+        let none = parse(&nobody);
+        assert!(none.listings.is_empty());
+        assert_eq!((none.read, none.unreadable), (held, 0));
     }
-    let (every_eu, eu_held) = parse_eu(EU_CSV, &[]);
-    let (every_ofac, ofac_held) = parse_ofac(SDN, ALT, &[]);
-    let (every_un, un_held) = parse_un(UN_XML, &[]);
-    assert_eq!((every_eu.len(), eu_held), (2, 2));
-    assert_eq!((every_ofac.len(), ofac_held), (3, 3));
-    assert_eq!((every_un.len(), un_held), (2, 2));
-    same_as_whole(&every_eu, eu_held, |query| parse_eu(EU_CSV, query));
-    same_as_whole(&every_ofac, ofac_held, |query| parse_ofac(SDN, ALT, query));
-    same_as_whole(&every_un, un_held, |query| parse_un(UN_XML, query));
+    let every_eu = parse_eu(EU_CSV, &[]);
+    let every_ofac = parse_ofac(SDN, ALT, &[]);
+    let every_un = parse_un(UN_XML, &[]);
+    assert_eq!((every_eu.listings.len(), every_eu.read), (2, 2));
+    assert_eq!((every_ofac.listings.len(), every_ofac.read), (3, 3));
+    assert_eq!((every_un.listings.len(), every_un.read), (2, 2));
+    same_as_whole(&every_eu.listings, every_eu.read, |query| {
+        parse_eu(EU_CSV, query)
+    });
+    same_as_whole(&every_ofac.listings, every_ofac.read, |query| {
+        parse_ofac(SDN, ALT, query)
+    });
+    same_as_whole(&every_un.listings, every_un.read, |query| {
+        parse_un(UN_XML, query)
+    });
 
     // A quoted cell before the identifier, or a quoted identifier, sends the row to the splitter.
     let quoted_date = EU_CSV.replace("07/11/2026;7200;", "\"07/11/2026\";\"7200\";");
     assert_ne!(quoted_date, EU_CSV);
-    let badege = crate::textnorm::name_tokens("Eric Badege");
+    let badege = crate::textnorm::name_match_keys("Eric Badege");
     assert_eq!(parse_eu(&quoted_date, &badege), parse_eu(EU_CSV, &badege));
-    assert_eq!(parse_eu(&quoted_date, &[]), (every_eu.clone(), 2));
+    assert_eq!(parse_eu(&quoted_date, &[]), every_eu);
     let quoted_number = SDN.replace("8279,", "\"8279\",");
     let quoted_alias = ALT.replace("8279,", "\"8279\",");
-    let bout = crate::textnorm::name_tokens("Victor Butt");
+    let bout = crate::textnorm::name_match_keys("Victor Butt");
     assert_eq!(
         parse_ofac(&quoted_number, &quoted_alias, &bout),
         parse_ofac(SDN, ALT, &bout)
     );
-    assert_eq!(parse_ofac(&quoted_number, &quoted_alias, &bout).0.len(), 1);
+    assert_eq!(
+        parse_ofac(&quoted_number, &quoted_alias, &bout)
+            .listings
+            .len(),
+        1
+    );
     assert_eq!(
         field_of("\"a;b\";7200;x", ';', 1).as_ref(),
         "7200",
@@ -355,12 +368,13 @@ fn a_list_builds_only_the_listings_that_may_carry_the_name_and_counts_them_all()
     // A name spelled with a character reference is matched as the letter it spells.
     let referenced = UN_XML.replace("<FIRST_NAME>ERIC<", "<FIRST_NAME>&#201;RIC<");
     assert_ne!(referenced, UN_XML);
-    let eric = crate::textnorm::name_tokens("Éric Badege");
-    let (built, read) = parse_un(&referenced, &eric);
-    assert_eq!(read, 2);
-    assert_eq!(built.len(), 1, "{built:?}");
-    assert_eq!(built[0].names[0], "ÉRIC BADEGE");
-    assert!(parse_un(&referenced, &badege).0.is_empty());
+    let eric = crate::textnorm::name_match_keys("Éric Badege");
+    let parsed = parse_un(&referenced, &eric);
+    assert_eq!((parsed.read, parsed.unreadable), (2, 0));
+    assert_eq!(parsed.listings.len(), 1, "{parsed:?}");
+    assert_eq!(parsed.listings[0].names[0], "ÉRIC BADEGE");
+    // A match key folds the accent: the plain spelling meets the listing too.
+    assert_eq!(parse_un(&referenced, &badege).listings.len(), 1);
 }
 
 #[test]
@@ -614,4 +628,88 @@ fn the_workbook_link_is_the_first_consolidated_xlsx_made_absolute() {
     );
     assert_eq!(workbook_link("<a href=\"/files/consolidated.csv\">"), None);
     assert_eq!(workbook_link("<a href=\"/files/other.xlsx\">"), None);
+}
+
+#[test]
+fn a_match_cap_is_reported_never_a_silent_complete_success() {
+    // 51 OFAC rows that all carry one name: the 50-match cap attaches 50 and the detail says one
+    // more matched. A capped result is a Success that admits it was cut off, never a clean count.
+    use std::fmt::Write as _;
+    let mut sdn = String::new();
+    for ent in 1000..1051 {
+        let _ = write!(
+            sdn,
+            "{ent},\"COMMON, Name\",\"individual\",\"X\",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- \r\n"
+        );
+    }
+    sdn.push('\u{1a}');
+    let sdn: &'static str = Box::leak(sdn.into_boxed_str());
+    let capped = Lists::new(
+        Box::new(RoutedTransport::new(&[
+            (OFAC_SDN.url, 200, sdn),
+            (OFAC_ALT.url, 200, ""),
+            (UN_SC.url, 200, UN_XML),
+            (EU_FSF.url, 200, EU_CSV),
+        ])),
+        None,
+    );
+    let (entities, outcomes) = check(&capped, "Name Common", "scan", 1);
+    let ofac: Vec<&Entity> = entities
+        .iter()
+        .filter(|e| e.raw_value.starts_with("https://sanctionssearch.ofac"))
+        .collect();
+    assert_eq!(ofac.len(), 50, "at most the cap is attached");
+    assert_eq!(outcomes[0].module, OFAC);
+    assert_eq!(outcomes[0].kind, SourceOutcomeKind::Success);
+    assert!(
+        outcomes[0]
+            .detail
+            .as_deref()
+            .unwrap_or("")
+            .contains("1 more matching listings beyond the first 50 were not attached"),
+        "{:?}",
+        outcomes[0]
+    );
+}
+
+#[test]
+fn unreadable_rows_block_a_clean_zero() {
+    // One readable listing that does not match, and one row too short to read: the subject could be
+    // in the unreadable row, so the outcome is Inconclusive, never a clean valid_zero. The short row
+    // is counted without being split, so a row that cannot carry the name is still counted.
+    const SHORT: &str = "306,\"BANCO NACIONAL DE CUBA\",-0- ,\"CUBA\",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,\"a.k.a. 'BNC'.\"\r\n9,\"TOO FEW COLUMNS\"\r\n\x1a";
+    let partial = Lists::new(
+        Box::new(RoutedTransport::new(&[
+            (OFAC_SDN.url, 200, SHORT),
+            (OFAC_ALT.url, 200, ""),
+            (UN_SC.url, 200, UN_XML),
+            (EU_FSF.url, 200, EU_CSV),
+        ])),
+        None,
+    );
+    let (_entities, outcomes) = check(&partial, "Jane Doe", "scan", 1);
+    assert_eq!(outcomes[0].module, OFAC);
+    assert_eq!(
+        outcomes[0].kind,
+        SourceOutcomeKind::Inconclusive,
+        "{:?}",
+        outcomes[0]
+    );
+    assert!(
+        outcomes[0]
+            .detail
+            .as_deref()
+            .unwrap_or("")
+            .contains("1 rows could not be read"),
+        "{:?}",
+        outcomes[0]
+    );
+    // A subject the EU file names only on a short row is not cleared either.
+    let short_eu = format!("{EU_CSV}07/11/2026;999;EU.1.1;P;SYR;;;Jane Doe\r\n");
+    let parsed = parse_eu(&short_eu, &crate::textnorm::name_match_keys("Jane Doe"));
+    // The short row is not a subject read: it is counted among the unreadable rows alone.
+    assert_eq!(
+        (parsed.listings.len(), parsed.read, parsed.unreadable),
+        (0, 2, 1)
+    );
 }

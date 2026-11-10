@@ -535,6 +535,22 @@ fn config_defaults_and_public_token_requirement_are_explicit() {
 /// one (seen 2026-10-14, "remove these weird token requirements"). A loopback server now
 /// needs none, whatever `HSE_AUTH_TOKEN` holds: every endpoint answers without
 /// `Authorization`, and health tells the page not to ask.
+/// A dual-stack bind (`[::]`, every interface over both address families, which a container
+/// entrypoint chooses where the kernel offers IPv6) is a public bind: it needs the token, and
+/// the host guard lets any authority through, as for `0.0.0.0`.
+#[test]
+fn a_dual_stack_bind_is_public_and_needs_the_token() {
+    for bind in ["[::]:8080", "0.0.0.0:8080"] {
+        assert!(
+            ServeConfig::parse(bind, None).is_err(),
+            "{bind} without a token"
+        );
+        let config = ServeConfig::parse(bind, Some("secret".into())).unwrap();
+        assert!(config.needs_token(), "{bind}");
+        assert!(!config.bind.ip().is_loopback(), "{bind}");
+    }
+}
+
 #[test]
 fn a_loopback_server_needs_no_token_even_when_one_is_supplied() {
     let lookups = echo_lookups();
