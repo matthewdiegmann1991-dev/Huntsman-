@@ -24,6 +24,7 @@ autonomous_capability	diagnostic	policy negotiation prototype exercised by an ex
 base64	leaf	RFC 4648 base64 codec for CSP hashes, PKCE values and certificate DER
 benchmark	diagnostic	benchmarking support
 ble_address	leaf	Bluetooth LE address typing by its bits, reached from network_cli
+ble_adv	adapter	Bluetooth LE advertisement decoder reached through radar ble-adv
 blockchain	adapter	blockchain.info Bitcoin address source client reached through crypto_cli
 base_rpc	adapter	keyless Base mainnet account observations through crypto_cli, scan and shared Web UI lookup; provenance retained without ownership attribution
 core	runtime	Stage 2 directory shim re-exporting L0/L3 leaves including network_selector
@@ -36,6 +37,7 @@ security_web	leaf	bounded anonymous HTTPS header inspection and operator-authori
 solana_rpc	adapter	keyless Solana mainnet-beta account observations through crypto_cli, scan and shared Web UI lookup: genesis-gated read-only batch, bounded SPL token, mint and multisig decode, recent transactions naming the address; provenance retained without ownership attribution
 evm_rpc	leaf	the one keyless EVM JSON-RPC account-observation core (batch request, fail-closed decode, exact-wei provenance) shared by base_rpc and eth_rpc
 bluesky_user	adapter	public Bluesky profile source client
+bt_company	leaf	Bluetooth SIG company identifier data, reached from rf::network_survey
 breach_hybrid	runtime	breach command gating and exposure order consumed by the CLI
 breach_record	leaf	what a breach record exposes, credentials held back, shared by the OathNet and DeHashed legs
 canonical	runtime	canonicalization for entities and provenance

@@ -17,7 +17,7 @@ use huntsman_recon::radar;
 use huntsman_recon::web_server::LookupError;
 use huntsman_recon::wifi_radar::{self, MAX_SCAN_BYTES};
 
-const USAGE: &str = "usage: huntsman-recon radar wifi|cells [--json] [--file TERMUX_SCAN_JSON] | radar survey-lte --file NETWORK_SURVEY_CSV [--json] | radar survey-nr --file NETWORK_SURVEY_CSV [--json] | radar survey-wifi --file NETWORK_SURVEY_CSV [--json] | radar survey-bluetooth --file NETWORK_SURVEY_CSV [--json] | radar track [--json] [--wifi-file FILE] [--cells-file FILE] [--log FILE]";
+const USAGE: &str = "usage: huntsman-recon radar wifi|cells [--json] [--file TERMUX_SCAN_JSON] | radar ble-adv [--address ADDR] [--raw] [--json] HEX... | radar survey-lte --file NETWORK_SURVEY_CSV [--json] | radar survey-nr --file NETWORK_SURVEY_CSV [--json] | radar survey-wifi --file NETWORK_SURVEY_CSV [--json] | radar survey-bluetooth --file NETWORK_SURVEY_CSV [--json] | radar track [--json] [--wifi-file FILE] [--cells-file FILE] [--log FILE]";
 
 /// A misbehaving descendant can keep a sensor stdout pipe open after the
 /// direct child exits. Bound detached drainers to avoid exhausting a server.
@@ -293,7 +293,53 @@ fn print_report<T: serde::Serialize>(
     }
 }
 
+/// `radar ble-adv`: decode the bytes of a Bluetooth LE advertisement a scanner showed, offline.
+fn ble_adv_cmd(args: &[String]) -> ExitCode {
+    let mut json = false;
+    let mut raw = false;
+    let mut address: Option<&str> = None;
+    let mut tokens: Vec<String> = Vec::new();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--json" if !json => json = true,
+            "--raw" if !raw => raw = true,
+            "--address" if address.is_none() => match rest.next() {
+                Some(value) if !value.starts_with("--") => address = Some(value.as_str()),
+                _ => return fail(EX_USAGE, USAGE),
+            },
+            flag if flag.starts_with("--") => return fail(EX_USAGE, USAGE),
+            token => tokens.push(token.to_owned()),
+        }
+    }
+    if tokens.is_empty() {
+        return fail(EX_USAGE, USAGE);
+    }
+    let bytes = match huntsman_recon::ble_adv::parse_hex_tokens(&tokens) {
+        Ok(bytes) => bytes,
+        Err(error) => return fail(EX_DATAERR, &format!("ble-adv: {error}")),
+    };
+    let report = match huntsman_recon::ble_adv::decode(&bytes, raw) {
+        Ok(report) => report,
+        Err(error) => return fail(EX_DATAERR, &format!("ble-adv: {error}")),
+    };
+    let report = match address {
+        Some(address) => match huntsman_recon::ble_adv::with_address(report, address) {
+            Ok(report) => report,
+            Err(error) => return fail(EX_DATAERR, &format!("ble-adv: {error}")),
+        },
+        None => report,
+    };
+    match print_report(&report, json, huntsman_recon::ble_adv::render) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(code) => code,
+    }
+}
+
 pub(super) fn radar_cmd(args: &[String]) -> ExitCode {
+    if args.first().map(String::as_str) == Some("ble-adv") {
+        return ble_adv_cmd(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("survey-lte") {
         return survey_lte_cmd(&args[1..]);
     }
