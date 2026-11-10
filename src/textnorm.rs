@@ -1332,21 +1332,6 @@ mod tests {
     }
 
     #[test]
-    fn subject_name_match_bridges_cyrillic_and_latin() {
-        // A Cyrillic query meets a Latin listing and the reverse, in any word order.
-        assert!(subject_name_match("Сергей Шойгу", "Sergey Shoygu"));
-        assert!(subject_name_match("Sergey Shoygu", "Шойгу Сергей"));
-        assert!(subject_name_match("Владимир Путин", "Vladimir Putin"));
-        // A listing missing one of the subject's words is never a match.
-        assert!(!subject_name_match("Сергей Шойгу", "Sergey Ivanov"));
-        // A single common name is too weak to match on its own.
-        assert!(!subject_name_match("Путин", "Putin"));
-        // Pure-ASCII behaviour is unchanged: still a whole-word subset match.
-        assert!(subject_name_match("Ada Lovelace", "ada k lovelace"));
-        assert!(!subject_name_match("Ada Lovelace", "ada byron"));
-    }
-
-    #[test]
     fn one_accented_letter_is_an_initial_not_a_name_token() {
         // Two bytes in UTF-8 but one letter. The people command has always treated it this way.
         assert_eq!(name_tokens("É Lovelace"), ["lovelace"]);

@@ -719,6 +719,34 @@ const EU_FIELDS: [(&str, &str); 16] = [
     ("Identification_Remark", "identification"),
 ];
 
+/// The EU list's subjects, read without splitting a row: every subject's id, the ids of the
+/// subjects with a row that may carry `query`, and the rows that cannot be read (a row without a
+/// subject, or with fewer cells than the header: a cell holding the separator only adds to the
+/// count). **Pure.**
+fn eu_subjects<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    id_at: usize,
+    columns: usize,
+    query: &[String],
+) -> (HashSet<Cow<'a, str>>, HashSet<Cow<'a, str>>, usize) {
+    let mut read = HashSet::new();
+    let mut candidates = HashSet::new();
+    let mut unreadable = 0;
+    for line in lines {
+        let line = line.trim_end_matches('\r');
+        let id = field_of(line, ';', id_at);
+        if id.is_empty() || line.matches(';').count() + 1 < columns {
+            unreadable += 1;
+            continue;
+        }
+        if crate::textnorm::carries_every_key(line, query) {
+            candidates.insert(id.clone());
+        }
+        read.insert(id);
+    }
+    (read, candidates, unreadable)
+}
+
 /// Every subject on the EU list that may carry `query` (every subject, for a `query` of no
 /// words), and how many subjects the list holds. The file holds one row per combination of a
 /// subject's names, addresses, birth dates, documents and citizenships, so rows are grouped by
@@ -736,23 +764,7 @@ fn parse_eu(csv: &str, query: &[String]) -> Parsed {
     else {
         return Parsed::default();
     };
-    let mut read: HashSet<Cow<'_, str>> = HashSet::new();
-    let mut candidates: HashSet<Cow<'_, str>> = HashSet::new();
-    let mut unreadable = 0;
-    for line in lines.clone() {
-        let line = line.trim_end_matches('\r');
-        let id = field_of(line, ';', id_at);
-        // A row without a subject, or with fewer cells than the header (counted without
-        // splitting: a cell holding the separator only adds to the count), cannot be read.
-        if id.is_empty() || line.matches(';').count() + 1 < header.len() {
-            unreadable += 1;
-            continue;
-        }
-        if crate::textnorm::carries_every_key(line, query) {
-            candidates.insert(id.clone());
-        }
-        read.insert(id);
-    }
+    let (read, candidates, mut unreadable) = eu_subjects(lines.clone(), id_at, header.len(), query);
     let parts_at = [
         column("NameAlias_FirstName"),
         column("NameAlias_MiddleName"),
