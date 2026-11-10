@@ -250,3 +250,53 @@ fn container_dependencies_compile_in_a_layer_a_new_commit_keeps() {
         "the sources are copied once, after the dependency layer"
     );
 }
+
+/// Railway deploys the provider-neutral image through config as code alone: `railway.toml`
+/// names the Dockerfile, the health route, one replica (the saved-scan store has one owner per
+/// directory), no sleeping (a long scan must not be stopped) and a restart policy, while the
+/// image, the entrypoint and the server stay free of the provider, as the retired-files test
+/// holds. The guide names the variables a deployment cannot do without.
+#[test]
+fn railway_profile_deploys_the_neutral_image_through_config_as_code() {
+    let profile = fs::read_to_string("railway.toml").expect("railway.toml");
+    for required in [
+        "[build]",
+        "builder = \"DOCKERFILE\"",
+        "dockerfilePath = \"Dockerfile\"",
+        "[deploy]",
+        "numReplicas = 1",
+        "healthcheckPath = \"/api/health\"",
+        "sleepApplication = false",
+        "restartPolicyType = \"ON_FAILURE\"",
+    ] {
+        assert!(
+            profile.contains(required),
+            "railway.toml must contain {required:?}"
+        );
+    }
+    assert!(
+        !profile.contains("startCommand"),
+        "the image's own entrypoint starts the server; a start command would bypass it"
+    );
+    let guide = fs::read_to_string("docs/CONTAINERS.md").expect("container guide");
+    for required in [
+        "## Railway",
+        "railway.toml",
+        "HSE_AUTH_TOKEN",
+        "${{RAILWAY_GIT_COMMIT_SHA}}",
+        "HUNTSMAN_SOURCE_SHA",
+        "mounted at `/data`",
+        "scripts/container-live-acceptance.sh",
+        "Railway remains optional",
+    ] {
+        assert!(
+            guide.contains(required),
+            "the Railway section must contain {required:?}"
+        );
+    }
+    let readme = fs::read_to_string("README.md").expect("README");
+    assert!(
+        readme.contains("railway.toml"),
+        "the README must point at the Railway profile"
+    );
+}

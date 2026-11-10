@@ -22,3 +22,21 @@ HUNTSMAN_EXPECTED_SHA="$(git rev-parse HEAD)" \
 ```
 
 The harness permits plain HTTP only on loopback; remote hosts require HTTPS. Local and Termux `serve` operations remain loopback-only unless explicitly configured with `--bind` or `HSE_BIND`; no container platform variable can silently widen the bind.
+
+## Railway
+
+The same image runs on [Railway](https://railway.com) with no provider-specific code: `railway.toml` at the repository root is the deployment profile Railway reads (the Dockerfile as the builder, `/api/health` as the health route, one replica, no application sleeping, restart on failure), and the generic entrypoint already honours the `PORT` Railway injects, binds `0.0.0.0:$PORT` and keeps its state under `/data`. Railway remains optional: nothing in the image or the server depends on it.
+
+1. **Deploy from the repository.** New Project, Deploy from GitHub repo, choose this repository and the branch to follow. Railway builds the root Dockerfile; the dependency layer is cached, so a later deploy compiles the crate alone.
+2. **Variables** (Service, Variables). Set `HSE_AUTH_TOKEN` to a long random secret: a public domain is a non-loopback bind, which needs the token, and a token the entrypoint generates lives only under `/data` and is never printed, so without the variable there is nothing to type into the page. Set `HUNTSMAN_SOURCE_SHA` to `${{RAILWAY_GIT_COMMIT_SHA}}` so the build embeds the deployed commit and `/api/health` reports it as `build_sha`, which the acceptance script checks. Add provider keys as `HUNTSMAN_*_KEY` variables where a keyed source is wanted; the keyless legs need none.
+3. **Volume.** Add a volume mounted at `/data`: it keeps the saved scans, the threat feeds, the sanctions lists, DFAT's workbook and the AEC archive the lookups keep on the device, and the generated token when `HSE_AUTH_TOKEN` is not set. A volume attaches to one replica, which is all the store supports.
+4. **Networking.** Generate a public domain. Railway terminates TLS and forwards plain HTTP to the service's `PORT`; the page and the API are served over HTTPS at the domain. Open `https://DOMAIN/#token=VALUE` once to hand the page its token, or call the API with `Authorization: Bearer` and `X-Huntsman-Lookup: 1` as the API reference describes. A lookup may take up to 150 seconds; a scan started from the page runs on the service and is read back under Scans.
+5. **Accept the deployment** from any machine with the repository checked out at the deployed commit, over HTTPS:
+
+```sh
+HUNTSMAN_CONTAINER_URL=https://DOMAIN HSE_AUTH_TOKEN="YOUR_SECRET_TOKEN" \
+HUNTSMAN_EXPECTED_SHA="$(git rev-parse HEAD)" \
+  bash scripts/container-live-acceptance.sh
+```
+
+A redeploy stops the running service with SIGTERM, which the entrypoint hands to the server; a scan still running then reads `ABORTED` after the restart, saved with what it had found. Rotate the token by changing the variable and redeploying.
