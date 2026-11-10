@@ -34,6 +34,7 @@ pub mod autonomous_capability;
 pub mod base64;
 pub mod base_rpc;
 pub mod benchmark;
+pub mod ble_address;
 pub mod blockchain;
 pub mod bluesky_user;
 pub mod breach_hybrid;

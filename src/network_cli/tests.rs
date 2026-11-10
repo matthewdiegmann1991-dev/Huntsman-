@@ -195,9 +195,65 @@ fn locally_administered_bssid_is_not_asserted_randomised_or_vendor_identified() 
     );
     assert!(!evidence.attributes.contains_key("vendor"));
     assert!(!evidence.attributes.contains_key("randomised"));
+    // 0xD6 = 1101 0110: read as a Bluetooth LE address, a static random address.
+    assert_eq!(
+        evidence
+            .attributes
+            .get("ble_address_kind")
+            .map(String::as_str),
+        Some("static_random")
+    );
     assert!(text.contains("unverified"), "{text}");
+    assert!(text.contains("static random"), "{text}");
     assert!(text.contains("wigle_networks=none"), "{text}");
     assert!(text.contains("wigle_bluetooth_devices=none"), "{text}");
+}
+
+/// A phone's rotating Bluetooth LE address, as a scanner shows it: the Wi-Fi reading says only
+/// "locally administered", the Bluetooth reading says it is resolvable private and will not
+/// identify the device later, and no request is made.
+#[test]
+fn a_resolvable_private_address_is_read_as_one_whatever_the_ul_bit_says() {
+    for (bssid, ul_bit) in [("67:06:21:95:C1:7C", true), ("64:06:21:95:C1:7C", false)] {
+        let (text, report) = printed(run(
+            &crate::test_support::Refusing,
+            &Keys::default(),
+            bssid,
+            7,
+        ));
+        assert_eq!(
+            report.outcomes[0].kind,
+            SourceOutcomeKind::Success,
+            "{bssid}"
+        );
+        let evidence = report.entities[0]
+            .evidence
+            .iter()
+            .find(|e| e.provenance.source == OUI_SOURCE)
+            .unwrap_or_else(|| panic!("{bssid}: offline evidence"));
+        assert_eq!(
+            evidence
+                .attributes
+                .get("locally_administered")
+                .map(String::as_str),
+            Some(if ul_bit { "true" } else { "false" }),
+            "{bssid}"
+        );
+        assert_eq!(
+            evidence
+                .attributes
+                .get("ble_address_kind")
+                .map(String::as_str),
+            Some("resolvable_private"),
+            "{bssid}"
+        );
+        assert!(!evidence.attributes.contains_key("vendor"), "{bssid}");
+        assert!(
+            text.contains("resolvable private")
+                && text.contains("does not identify the device later"),
+            "{bssid}: {text}"
+        );
+    }
 }
 
 /// A BSSID `WiGLE` recorded is observed by `WiGLE` alone: the OUI registry's reading of its prefix is
@@ -246,8 +302,10 @@ fn a_bssids_manufacturer_is_no_source_of_it() {
 
 #[test]
 fn a_prefix_no_manufacturer_is_registered_for_reports_none() {
-    // 10:10:10 has no IEEE MA-L assignment: the registry names no manufacturer, so the OUI row
-    // is a validated zero and no "Unknown" manufacturer is recorded as found.
+    // 10:10:10 has no IEEE MA-L assignment: the registry names no manufacturer, no "Unknown"
+    // manufacturer is recorded as found, and the offline evidence says so. Read as a Bluetooth
+    // LE address (0x10 = 0001 0000, top bits `00`) it is non-resolvable private, which the same
+    // evidence says: the reading is what the lookup found about the address.
     let (text, report) = printed(run(
         &crate::test_support::Refusing,
         &Keys::default(),
@@ -257,17 +315,27 @@ fn a_prefix_no_manufacturer_is_registered_for_reports_none() {
     assert_eq!(report.outcomes[0].module, OUI_SOURCE);
     assert_eq!(
         report.outcomes[0].kind,
-        SourceOutcomeKind::ValidZero,
+        SourceOutcomeKind::Success,
         "{text}"
+    );
+    let evidence = report.entities[0]
+        .evidence
+        .iter()
+        .find(|e| e.provenance.source == OUI_SOURCE)
+        .expect("offline evidence");
+    assert!(!evidence.attributes.contains_key("vendor"), "{text}");
+    assert_eq!(
+        evidence
+            .attributes
+            .get("ble_address_kind")
+            .map(String::as_str),
+        Some("non_resolvable_private")
     );
     assert!(
-        report
-            .entities
-            .iter()
-            .flat_map(|entity| &entity.evidence)
-            .all(|evidence| !evidence.attributes.contains_key("vendor")),
+        evidence.summary.contains("No IEEE OUI assignment"),
         "{text}"
     );
+    assert!(!text.contains("Unknown"), "{text}");
 }
 
 #[test]

@@ -77,7 +77,8 @@ impl OuiInfo {
 
 /// The six octets of a MAC address written as 12 hex digits, bare or separated by `:`, `-` or
 /// `.`. Anything else, such as text that merely contains hex letters, is not an address.
-fn octets(mac: &str) -> Option<[u8; 6]> {
+/// The six octets of a MAC written with `:`, `-`, `.` or nothing between them. **Pure.**
+pub(crate) fn octets(mac: &str) -> Option<[u8; 6]> {
     let digits = mac
         .bytes()
         .filter(|byte| !matches!(byte, b':' | b'-' | b'.'))
