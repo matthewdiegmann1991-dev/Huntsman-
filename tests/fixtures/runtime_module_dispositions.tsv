@@ -24,6 +24,7 @@ autonomous_capability	diagnostic	policy negotiation prototype exercised by an ex
 base64	leaf	RFC 4648 base64 codec for CSP hashes, PKCE values and certificate DER
 benchmark	diagnostic	benchmarking support
 ble_address	leaf	Bluetooth LE address typing by its bits, reached from network_cli
+ble_adv	adapter	Bluetooth LE advertisement decoder reached through radar ble-adv
 blockchain	adapter	blockchain.info Bitcoin address source client reached through crypto_cli
 base_rpc	adapter	keyless Base mainnet account observations through crypto_cli, scan and shared Web UI lookup; provenance retained without ownership attribution
 core	runtime	Stage 2 directory shim re-exporting L0/L3 leaves including network_selector
